@@ -21,6 +21,8 @@ from datetime import date
 from typing import Any
 
 import aiohttp
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from yarl import URL
 
 from .const import BASE_URL
@@ -76,16 +78,29 @@ class MessdatenResponse:
 
 
 class OberbuerenClient:
-    """Async client for the Oberbüren Lastgangdaten endpoint."""
+    """Async client for the Oberbüren Lastgangdaten endpoint.
+
+    Each instance owns its own aiohttp session with a *private* cookie
+    jar. We deliberately don't reuse HA's shared client session
+    (``async_get_clientsession``) because its cookie jar is global to
+    the whole HA instance — a stale PHPSESSID left over from a previous
+    config-flow validation made GET /login serve the *profile* page
+    (which contains no login form, hence no CSRF token), causing setup
+    to retry-fail forever. With a private jar each client starts clean.
+    """
 
     def __init__(
         self,
-        session: aiohttp.ClientSession,
+        hass: HomeAssistant,
         email: str,
         password: str,
         base_url: str = BASE_URL,
     ) -> None:
-        self._session = session
+        # async_create_clientsession spins up a session backed by HA's
+        # connector pool but with its own CookieJar. ``auto_cleanup=True``
+        # (the default) registers it for shutdown closure so we don't
+        # need explicit lifecycle management here.
+        self._session = async_create_clientsession(hass)
         self._email = email
         self._password = password
         self._base_url = base_url.rstrip("/")

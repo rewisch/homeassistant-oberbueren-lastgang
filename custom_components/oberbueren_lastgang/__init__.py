@@ -20,7 +20,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
 from .api import ApiError, AuthError, OberbuerenClient
@@ -48,9 +47,8 @@ _BACKFILL_SCHEMA = vol.Schema(
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    session = async_get_clientsession(hass)
     client = OberbuerenClient(
-        session=session,
+        hass=hass,
         email=entry.data[CONF_EMAIL],
         password=entry.data[CONF_PASSWORD],
     )

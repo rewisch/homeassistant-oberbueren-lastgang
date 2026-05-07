@@ -18,7 +18,6 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ApiError, AuthError, OberbuerenClient
 from .const import (
@@ -64,9 +63,8 @@ class OberbuerenConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            session = async_get_clientsession(self.hass)
             client = OberbuerenClient(
-                session=session,
+                hass=self.hass,
                 email=user_input[CONF_EMAIL],
                 password=user_input[CONF_PASSWORD],
             )
