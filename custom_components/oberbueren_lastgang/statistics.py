@@ -264,6 +264,7 @@ async def _async_import_costs(
     """
     per_category = compute_hourly_costs(hourly_kwh, tariffs)
 
+    final_sums: dict[str, float] = {}
     for category_key in (*COST_CATEGORY_KEYS, COST_TOTAL_KEY):
         stat_id = build_cost_statistic_id(objekt_id, category_key)
         meta = build_cost_statistic_metadata(objekt_id, category_key, friendly_name)
@@ -277,14 +278,16 @@ async def _async_import_costs(
             )
 
         async_add_external_statistics(hass, meta, points)
+        final_sums[category_key] = running
 
     _LOGGER.info(
         "Imported cost statistics for objekt_%s across %d categories "
-        "(%d hourly points each, fresh_anchor=%s)",
+        "(%d hourly points each, fresh_anchor=%s). Final sums: %s",
         objekt_id,
         len(COST_CATEGORY_KEYS) + 1,
         len(hourly_kwh),
         fresh_anchor,
+        ", ".join(f"{k}={v:.2f}" for k, v in final_sums.items()),
     )
 
 
@@ -326,7 +329,9 @@ async def async_recompute_costs(
     raw_rows = rows.get(kwh_id, [])
     if not raw_rows:
         _LOGGER.warning(
-            "No kWh statistics found for %s — nothing to recompute", kwh_id
+            "No kWh statistics found for %s — nothing to recompute. "
+            "Check Developer Tools → Statistics whether this ID exists.",
+            kwh_id,
         )
         return 0
 
@@ -338,6 +343,15 @@ async def async_recompute_costs(
             start = datetime.fromtimestamp(float(start), tz=timezone.utc)
         change = row.get("change")
         hourly_kwh.append((start, float(change) if change is not None else 0.0))
+
+    total_kwh = sum(k for _, k in hourly_kwh)
+    _LOGGER.info(
+        "Recompute kWh source for %s: %d hourly rows, %.3f kWh total, "
+        "first=%s, last=%s",
+        kwh_id, len(hourly_kwh), total_kwh,
+        hourly_kwh[0][0].isoformat(),
+        hourly_kwh[-1][0].isoformat(),
+    )
 
     await _async_import_costs(
         hass, objekt_id, friendly_name, hourly_kwh, tariffs,

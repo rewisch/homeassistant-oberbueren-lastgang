@@ -153,6 +153,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "<HA-config>/oberbueren_lastgang_tariffs.yaml"
                 )
 
+            _LOGGER.info(
+                "Recompute starting for %s (objekt_id=%r): %d tariff "
+                "period(s) loaded",
+                target.friendly_name, target.objekt_id, len(tariffs),
+            )
+
             total = 0
             for messlinie in ACTIVE_MESSLINIEN:
                 total += await async_recompute_costs(
