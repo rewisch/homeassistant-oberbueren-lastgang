@@ -1,0 +1,96 @@
+# Strom Oberbüren Lastgang — Home Assistant Integration
+
+A custom integration that pulls 15-minute electricity load-curve data from
+[strom.oberbueren.ch](https://www.strom.oberbueren.ch) and writes it to
+Home Assistant's long-term statistics so it survives the recorder purge
+and shows up in the Energy Dashboard.
+
+## Installation
+
+### Via HACS (recommended)
+
+1. In HACS: **Integrationen → ⋮ Menü → Benutzerdefinierte Repositories**.
+2. Repository: `https://github.com/rewisch/homeassistant-oberbueren-lastgang`,
+   Kategorie: **Integration**, hinzufügen.
+3. Die Integration "Strom Oberbüren Lastgang" wird in HACS angezeigt →
+   **Herunterladen**.
+4. Home Assistant neu starten.
+5. **Einstellungen → Geräte & Dienste → Integration hinzufügen → "Strom
+   Oberbüren Lastgang"**.
+6. Email + Passwort eingeben, dann `objektId` und `meteringcode` deines
+   Zählers (beides findest du in der URL der Lastgangdaten-Seite im
+   Browser).
+
+### Manuelle Installation
+
+1. `custom_components/oberbueren_lastgang/` aus diesem Repo nach
+   `<config>/custom_components/` deiner HA-Installation kopieren.
+2. Home Assistant neu starten.
+3. Schritte 5–6 oben.
+
+## Daily auto-import
+
+Once configured, the integration imports yesterday's data every morning
+at **06:00 local time**. No further action required.
+
+## Initial backfill
+
+The first time you set it up you'll likely want to import several months
+or years of history. Use the `oberbueren_lastgang.backfill` service:
+
+```yaml
+service: oberbueren_lastgang.backfill
+data:
+  entry_id: 01HX9Z7E8K2QY7CDXR...    # see Settings → … → Show entry ID
+  start_date: 2024-01-01
+  end_date: 2024-12-31
+```
+
+Tip: backfill in chronological chunks (e.g. one year at a time) so the
+cumulative kWh sums build up correctly. The integration fetches one HTTP
+request per day, so a full year takes ~365 requests. Be a polite citizen
+and don't hammer the API.
+
+## What ends up in HA
+
+For each configured meter the integration creates one **external
+statistic** per Messlinie:
+
+| Statistic ID | Meaning | Unit |
+|--------------|---------|------|
+| `oberbueren_lastgang:objekt_<id>_bezug` | cumulative consumption | kWh |
+
+`has_sum=True` means it plugs straight into the Energy Dashboard:
+**Settings → Dashboards → Energy → Add consumption** and pick the
+statistic.
+
+The 15-minute kW samples from the API are converted to kWh
+(`kWh = kW × 0.25h`) and aggregated into hourly buckets — that's the
+finest granularity HA's external statistics support.
+
+## Adding Einspeisung (PV feed-in) later
+
+The Messlinie abstraction in `const.py` already defines `1-1:2.5.0`
+(Einspeisung). To activate it: change
+
+```python
+ACTIVE_MESSLINIEN = (MESSLINIE_BEZUG,)
+```
+
+to
+
+```python
+ACTIVE_MESSLINIEN = (MESSLINIE_BEZUG, MESSLINIE_EINSPEISUNG)
+```
+
+and re-run a backfill. The rest of the pipeline (API client, statistics
+import) is already direction-agnostic.
+
+## Limitations
+
+* Re-running backfill over a window that's already imported re-anchors
+  the running sum; for clean re-imports clear the existing statistics
+  first via **Developer Tools → Statistics → Fix issues**.
+* The daily import runs at 06:00 local. If your HA host is offline that
+  morning, that day is missed — re-import via the backfill service.
+* Only the `Bezug` Messlinie is wired up by default. See above.

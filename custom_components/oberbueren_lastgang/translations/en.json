@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Strom Oberbüren — Sign in",
+        "description": "Enter your strom.oberbueren.ch credentials.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "meter": {
+        "title": "Meter",
+        "description": "Find these values in the URL of the Lastgangdaten page (parameters `objektId` and `meteringcode`).",
+        "data": {
+          "name": "Display name (e.g. Apartment)",
+          "objekt_id": "Object ID",
+          "meteringcode": "Metering Code"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Wrong email or password.",
+      "cannot_connect": "Could not connect to the site."
+    },
+    "abort": {
+      "already_configured": "This meter has already been configured."
+    }
+  },
+  "services": {
+    "backfill": {
+      "name": "Backfill load curve",
+      "description": "Imports a date range of historical load-curve data as long-term statistics.",
+      "fields": {
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Which configured account to use."
+        },
+        "start_date": {
+          "name": "Start date",
+          "description": "First day (inclusive)."
+        },
+        "end_date": {
+          "name": "End date",
+          "description": "Last day (inclusive). Defaults to start date."
+        }
+      }
+    }
+  }
+}

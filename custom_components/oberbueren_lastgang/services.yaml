@@ -1,0 +1,32 @@
+backfill:
+  name: Backfill Lastgangdaten
+  description: >-
+    Fetch and import a contiguous date range of historical load-curve data
+    into Home Assistant's long-term statistics. Run once after initial setup
+    to populate history; the daily auto-import takes over from there.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: >-
+        The ID of the configured Oberbüren Lastgang entry to backfill. You
+        can find it under Settings → Devices & Services → … → three-dot
+        menu → "Show entry ID", or in the config entries .storage file.
+      required: true
+      example: "01HX9Z7E8K2QY7CDXR..."
+      selector:
+        config_entry:
+          integration: oberbueren_lastgang
+    start_date:
+      name: Start date
+      description: First day to import (inclusive).
+      required: true
+      example: "2024-01-01"
+      selector:
+        date:
+    end_date:
+      name: End date
+      description: Last day to import (inclusive). Defaults to start_date.
+      required: false
+      example: "2024-12-31"
+      selector:
+        date:

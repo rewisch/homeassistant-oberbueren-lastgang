@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Strom Oberbüren — Anmeldung",
+        "description": "Gib deine Zugangsdaten von strom.oberbueren.ch ein.",
+        "data": {
+          "email": "E-Mail",
+          "password": "Passwort"
+        }
+      },
+      "meter": {
+        "title": "Zähler",
+        "description": "Diese Werte findest du in der URL der Lastgangdaten-Seite (Parameter `objektId` und `meteringcode`).",
+        "data": {
+          "name": "Anzeigename (z. B. Wohnung)",
+          "objekt_id": "Objekt-ID",
+          "meteringcode": "Metering Code"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "E-Mail oder Passwort falsch.",
+      "cannot_connect": "Verbindung zur Webseite fehlgeschlagen."
+    },
+    "abort": {
+      "already_configured": "Dieser Zähler wurde bereits hinzugefügt."
+    }
+  },
+  "services": {
+    "backfill": {
+      "name": "Backfill Lastgangdaten",
+      "description": "Importiert einen Zeitbereich historischer Lastgangdaten als Long-Term-Statistik.",
+      "fields": {
+        "entry_id": {
+          "name": "Config Entry",
+          "description": "Welche konfigurierte Anmeldung soll genutzt werden."
+        },
+        "start_date": {
+          "name": "Startdatum",
+          "description": "Erster Tag (inklusiv)."
+        },
+        "end_date": {
+          "name": "Enddatum",
+          "description": "Letzter Tag (inklusiv). Default: gleiches Datum wie Start."
+        }
+      }
+    }
+  }
+}
