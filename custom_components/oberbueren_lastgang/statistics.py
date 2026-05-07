@@ -34,6 +34,16 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+
+# StatisticMeanType is the modern way to declare "this stat has no
+# arithmetic mean" — older HA used ``has_mean=False``. Both fields are
+# accepted by current HA, but ``mean_type`` is required from 2026.11
+# onward. Conditional import keeps us compatible with older versions.
+try:
+    from homeassistant.components.recorder.models import StatisticMeanType
+    _MEAN_TYPE_NONE: object | None = StatisticMeanType.NONE
+except ImportError:                                            # pragma: no cover
+    _MEAN_TYPE_NONE = None
 from homeassistant.core import HomeAssistant
 
 from .api import MessdatenResponse
@@ -72,16 +82,13 @@ def build_statistic_metadata(
     """Build the metadata block sent to async_add_external_statistics.
 
     ``has_sum=True`` is what wires this statistic into the Energy Dashboard
-    as a cumulative-energy series (kWh). ``has_mean=False`` because we don't
-    push hourly mean power separately — the Energy Dashboard only needs sum.
+    as a cumulative-energy series (kWh). We declare no mean (cumulative
+    energy doesn't have a meaningful arithmetic mean over a period).
     """
-    return StatisticMetaData(
-        has_mean=False,
-        has_sum=True,
-        name=f"{friendly_name} {messlinie.label}",
-        source=DOMAIN,
+    return _build_meta(
         statistic_id=build_statistic_id(objekt_id, messlinie),
-        unit_of_measurement="kWh",
+        name=f"{friendly_name} {messlinie.label}",
+        unit="kWh",
     )
 
 
@@ -152,14 +159,33 @@ def build_cost_statistic_metadata(
     friendly_name: str,
 ) -> StatisticMetaData:
     label = COST_CATEGORY_LABELS.get(category_key, category_key)
-    return StatisticMetaData(
-        has_mean=False,
-        has_sum=True,
-        name=f"{friendly_name} {label}",
-        source=DOMAIN,
+    return _build_meta(
         statistic_id=build_cost_statistic_id(objekt_id, category_key),
-        unit_of_measurement=CURRENCY,
+        name=f"{friendly_name} {label}",
+        unit=CURRENCY,
     )
+
+
+def _build_meta(*, statistic_id: str, name: str, unit: str) -> StatisticMetaData:
+    """Construct a StatisticMetaData using whichever ``has_mean`` /
+    ``mean_type`` fields the running HA version expects.
+
+    Both old and new HA still accept ``has_mean``, but new HA also
+    requires (or warns when missing) ``mean_type``. We provide both
+    when the new enum is available, so the metadata is acceptable on
+    any version we support.
+    """
+    kwargs: dict = {
+        "has_mean": False,
+        "has_sum": True,
+        "name": name,
+        "source": DOMAIN,
+        "statistic_id": statistic_id,
+        "unit_of_measurement": unit,
+    }
+    if _MEAN_TYPE_NONE is not None:
+        kwargs["mean_type"] = _MEAN_TYPE_NONE
+    return StatisticMetaData(**kwargs)
 
 
 async def async_import_many(
