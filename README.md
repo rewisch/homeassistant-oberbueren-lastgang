@@ -1,9 +1,28 @@
 # Strom Oberbüren Lastgang — Home Assistant Integration
 
 A custom integration that pulls 15-minute electricity load-curve data from
-[strom.oberbueren.ch](https://www.strom.oberbueren.ch) and writes it to
-Home Assistant's long-term statistics so it survives the recorder purge
-and shows up in the Energy Dashboard.
+[strom.oberbueren.ch](https://www.strom.oberbueren.ch) into Home Assistant
+— for the Energy Dashboard, for cost tracking, and for Lovelace dashboards.
+
+## Features
+
+* **Long-term statistics** — daily import of yesterday's 15-min samples,
+  bucketed to hourly kWh, written as External Statistics so they survive
+  the recorder purge and show up in the **Energy Dashboard** (kWh + CHF).
+* **Cost calculation** — every imported hour is costed against a
+  user-editable Swiss tariff file (HT/NT, Netznutzung, Energiebezug,
+  Abgaben, Messtarif), with per-category breakdown and `cost_total` for
+  the Energy Dashboard's price field.
+* **18 dashboard sensors per meter** — Verbrauch & Kosten over Aktueller
+  Monat / Letzter Monat / Aktuelles Jahr / Letztes Jahr / Gestern /
+  Letzte 7 Tage / Letzte 30 Tage, plus Prognose Monat, Prognose Jahr,
+  Ø Tagesverbrauch, Ø Preis.
+* **Auto catch-up** — if HA was offline at the daily 06:00 fetch (or for
+  several days), missed days are imported automatically on the next
+  startup or at the next 06:00 trigger.
+* **Safe re-runs** — re-running `backfill` over data already in HA
+  detects the overlap, merges, and rebuilds the cumulative sum chain
+  cleanly — no more "Fix issues in Statistics" workaround.
 
 ## Installation
 
