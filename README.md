@@ -91,21 +91,33 @@ consumption**, pick `…_bezug` for kWh and `…_cost_total` for the price.
 
 ### Sensor entities (Lovelace-friendly)
 
-In addition to the long-term statistics, 8 sensor entities per meter
-are created so you can drop them on dashboards or use in automations:
+In addition to the long-term statistics, 18 sensor entities per meter
+are created so you can drop them on dashboards or use in automations.
 
-* `sensor.<name>_verbrauch_aktueller_monat`   (kWh)
-* `sensor.<name>_verbrauch_letzter_monat`     (kWh)
-* `sensor.<name>_verbrauch_aktuelles_jahr`    (kWh)
-* `sensor.<name>_verbrauch_letztes_jahr`      (kWh)
-* `sensor.<name>_kosten_aktueller_monat`      (CHF)
-* `sensor.<name>_kosten_letzter_monat`        (CHF)
-* `sensor.<name>_kosten_aktuelles_jahr`       (CHF)
-* `sensor.<name>_kosten_letztes_jahr`         (CHF)
+**Period sensors** (kWh + CHF for each — 14 total):
 
-The Kosten sensors expose a per-category breakdown via the entity
-attributes — open the entity in **Developer Tools → States** to see
-"wovon kommt der Betrag".
+| Period | Coverage |
+|---|---|
+| Aktueller Monat | seit 1. des Monats bis jetzt |
+| Letzter Monat | kompletter Vormonat |
+| Aktuelles Jahr | seit 1. Januar bis jetzt |
+| Letztes Jahr | komplettes Vorjahr |
+| Gestern | voller Vortag |
+| Letzte 7 Tage | 7 komplette Tage bis und mit gestern |
+| Letzte 30 Tage | 30 komplette Tage bis und mit gestern |
+
+**Smart sensors** (4 derived):
+
+| Sensor | Unit | Beschreibung |
+|---|---|---|
+| Prognose Monat | CHF | Linear hochgerechnet auf Monatsende |
+| Prognose Jahr | CHF | Linear hochgerechnet auf Jahresende |
+| Ø Tagesverbrauch (Monat) | kWh | Verbrauch ÷ Tage seit Monatsanfang |
+| Ø Preis (Monat) | Rp/kWh | Effektiver Preis incl. MwSt |
+
+The Kosten period sensors expose a per-category breakdown via the
+entity attributes — open the entity in **Developer Tools → States**
+to see "wovon kommt der Betrag".
 
 Refresh runs hourly so values catch up within an hour after the daily
 import lands at 06:00.

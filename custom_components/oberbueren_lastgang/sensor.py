@@ -16,6 +16,7 @@ der Betrag" without needing four extra entities per period.
 """
 from __future__ import annotations
 
+import calendar
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -117,11 +118,46 @@ class LastYear(PeriodSpec):
         return start, end
 
 
+# Periods that intentionally end at midnight today rather than ``now``:
+# the upstream API only delivers data through *yesterday*, so anchoring
+# the end to today's 00:00 means the sensor window contains exactly the
+# hours we have data for (no partial-day artefacts).
+
+@dataclass(frozen=True)
+class Yesterday(PeriodSpec):
+    def resolve(self, now_local: datetime) -> tuple[datetime, datetime]:
+        today_start = now_local.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return today_start - timedelta(days=1), today_start
+
+
+@dataclass(frozen=True)
+class Last7Days(PeriodSpec):
+    def resolve(self, now_local: datetime) -> tuple[datetime, datetime]:
+        today_start = now_local.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return today_start - timedelta(days=7), today_start
+
+
+@dataclass(frozen=True)
+class Last30Days(PeriodSpec):
+    def resolve(self, now_local: datetime) -> tuple[datetime, datetime]:
+        today_start = now_local.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return today_start - timedelta(days=30), today_start
+
+
 _PERIODS: tuple[PeriodSpec, ...] = (
     CurrentMonth(key="current_month", de_label="Aktueller Monat"),
     LastMonth(key="last_month", de_label="Letzter Monat"),
     CurrentYear(key="current_year", de_label="Aktuelles Jahr"),
     LastYear(key="last_year", de_label="Letztes Jahr"),
+    Yesterday(key="yesterday", de_label="Gestern"),
+    Last7Days(key="last_7_days", de_label="Letzte 7 Tage"),
+    Last30Days(key="last_30_days", de_label="Letzte 30 Tage"),
 )
 
 
@@ -169,18 +205,18 @@ class AggregateCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 (f"cost_{cat}", build_cost_statistic_id(self._objekt_id, cat))
             )
 
-    async def _async_update_data(self) -> dict[str, float]:
+    async def _async_update_data(self) -> dict[str, float | None]:
         now_local = dt_util.now().astimezone(_LOCAL_TZ)
         recorder = get_instance(self.hass)
-        result: dict[str, float] = {}
+        result: dict[str, float | None] = {}
 
         for period in _PERIODS:
             start_local, end_local = period.resolve(now_local)
             start_utc = start_local.astimezone(dt_util.UTC)
             end_utc = end_local.astimezone(dt_util.UTC)
 
-            # One DB query per series per period. Eight series × four
-            # periods = 32 cheap range queries per hour, well below any
+            # One DB query per series per period. Seven series × seven
+            # periods = 49 cheap range queries per hour, well below any
             # recorder overhead concerns.
             for prefix, stat_id in self._series:
                 value = await recorder.async_add_executor_job(
@@ -192,6 +228,7 @@ class AggregateCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 )
                 result[f"{prefix}_{period.key}"] = value
 
+        _add_derived(result, now_local)
         return result
 
 
@@ -212,6 +249,49 @@ def _sum_change_for(
         {"change"},
     ).get(statistic_id, [])
     return float(sum(r.get("change") or 0.0 for r in rows))
+
+
+def _add_derived(result: dict[str, float | None], now_local: datetime) -> None:
+    """Compute projection / average sensors from the period values.
+
+    Anchored on the pure assumption that the upstream feed provides
+    full-day data through *yesterday* — so the number of complete days
+    of consumption for the current month is ``today.day - 1``, and for
+    the current year ``timetuple().tm_yday - 1``. Both ``None`` if the
+    period has only just started (no completed day yet).
+    """
+    days_in_month = calendar.monthrange(now_local.year, now_local.month)[1]
+    days_in_year = 366 if calendar.isleap(now_local.year) else 365
+    days_done_month = now_local.day - 1
+    days_done_year = now_local.timetuple().tm_yday - 1
+
+    cm_kwh = result.get("kwh_current_month") or 0.0
+    cm_cost = result.get("cost_total_current_month") or 0.0
+
+    if days_done_month > 0:
+        result["projected_month_cost"] = cm_cost / days_done_month * days_in_month
+        result["avg_daily_kwh_current_month"] = cm_kwh / days_done_month
+    else:
+        # First day of the month before yesterday's data lands → no
+        # meaningful projection.
+        result["projected_month_cost"] = None
+        result["avg_daily_kwh_current_month"] = None
+
+    if days_done_year > 0:
+        cy_cost = result.get("cost_total_current_year") or 0.0
+        result["projected_year_cost"] = cy_cost / days_done_year * days_in_year
+    else:
+        result["projected_year_cost"] = None
+
+    # Effective average price = total CHF / total kWh × 100 (Rp/kWh).
+    # Falls apart if there's no kWh consumption (division by zero) or
+    # the cost statistics never got recomputed against a real tariff
+    # (cm_cost stays 0 → reported price 0 — visibly broken, which is
+    # honest signaling).
+    if cm_kwh > 0:
+        result["avg_price_rp_per_kwh_current_month"] = cm_cost / cm_kwh * 100
+    else:
+        result["avg_price_rp_per_kwh_current_month"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +322,67 @@ async def async_setup_entry(
                 coordinator, friendly, objekt_id, meteringcode, period
             )
         )
+    for spec in _DERIVED_SPECS:
+        entities.append(
+            DerivedSensor(
+                coordinator, friendly, objekt_id, meteringcode, spec
+            )
+        )
 
     async_add_entities(entities)
+
+
+# ---------------------------------------------------------------------------
+# Derived sensors (projections, averages)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DerivedSensorSpec:
+    """Static description of one computed sensor backed by a coordinator key."""
+
+    coordinator_key: str
+    name: str                       # full sensor name (after device prefix)
+    unique_id_suffix: str
+    unit: str
+    device_class: SensorDeviceClass | None
+    icon: str | None = None
+    decimals: int = 2
+
+
+_DERIVED_SPECS: tuple[DerivedSensorSpec, ...] = (
+    DerivedSensorSpec(
+        coordinator_key="projected_month_cost",
+        name="Prognose Monat",
+        unique_id_suffix="prognose_monat",
+        unit=CURRENCY,
+        device_class=SensorDeviceClass.MONETARY,
+    ),
+    DerivedSensorSpec(
+        coordinator_key="projected_year_cost",
+        name="Prognose Jahr",
+        unique_id_suffix="prognose_jahr",
+        unit=CURRENCY,
+        device_class=SensorDeviceClass.MONETARY,
+    ),
+    DerivedSensorSpec(
+        coordinator_key="avg_daily_kwh_current_month",
+        name="Ø Tagesverbrauch (Monat)",
+        unique_id_suffix="avg_daily_kwh_month",
+        unit="kWh",
+        device_class=None,
+        icon="mdi:counter",
+        decimals=2,
+    ),
+    DerivedSensorSpec(
+        coordinator_key="avg_price_rp_per_kwh_current_month",
+        name="Ø Preis (Monat)",
+        unique_id_suffix="avg_price_rp_kwh_month",
+        unit="Rp/kWh",
+        device_class=None,
+        icon="mdi:cash-multiple",
+        decimals=2,
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -367,3 +506,47 @@ class CostPeriodSensor(_BasePeriodSensor):
                 continue
             out[COST_CATEGORY_LABELS[cat]] = round(value, 2)
         return out
+
+
+class DerivedSensor(CoordinatorEntity[AggregateCoordinator], SensorEntity):
+    """One of the projection / average sensors driven by ``DerivedSensorSpec``."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: AggregateCoordinator,
+        friendly_name: str,
+        objekt_id: str,
+        meteringcode: str,
+        spec: DerivedSensorSpec,
+    ) -> None:
+        super().__init__(coordinator)
+        self._spec = spec
+        self._attr_unique_id = (
+            f"{DOMAIN}_{objekt_id}_{meteringcode}_{spec.unique_id_suffix}"
+        )
+        self._attr_name = spec.name
+        self._attr_native_unit_of_measurement = spec.unit
+        if spec.device_class is not None:
+            self._attr_device_class = spec.device_class
+        if spec.icon is not None:
+            self._attr_icon = spec.icon
+
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, f"{objekt_id}:{meteringcode}")},
+            "name": friendly_name,
+            "manufacturer": "Strom Oberbüren",
+            "model": "Lastgang-Importer",
+        }
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        value = self.coordinator.data.get(self._spec.coordinator_key)
+        if value is None:
+            return None
+        return round(value, self._spec.decimals)
