@@ -30,3 +30,21 @@ backfill:
       example: "2024-12-31"
       selector:
         date:
+
+recompute_costs:
+  name: Recompute costs
+  description: >-
+    Rebuild all six cost statistics from the kWh data already in HA. No
+    HTTP requests are made — this only re-applies the current tariff
+    file (oberbueren_lastgang_tariffs.yaml) to existing consumption
+    data. Use after editing the tariff file or after first enabling the
+    cost feature on top of pre-existing kWh data.
+  fields:
+    entry_id:
+      name: Config entry
+      description: Which configured account to recompute.
+      required: true
+      example: "01HX9Z7E8K2QY7CDXR..."
+      selector:
+        config_entry:
+          integration: oberbueren_lastgang

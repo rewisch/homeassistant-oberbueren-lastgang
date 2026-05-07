@@ -24,6 +24,7 @@ from homeassistant.helpers.event import async_track_time_change
 
 from .api import ApiError, AuthError, OberbuerenClient
 from .const import (
+    ACTIVE_MESSLINIEN,
     ATTR_END_DATE,
     ATTR_START_DATE,
     CONF_EMAIL,
@@ -33,7 +34,10 @@ from .const import (
     SERVICE_BACKFILL,
 )
 from .coordinator import LastgangCoordinator
-from .tariffs import install_default_tariffs_if_missing
+from .statistics import async_recompute_costs
+from .tariffs import install_default_tariffs_if_missing, load_tariffs
+
+SERVICE_RECOMPUTE_COSTS = "recompute_costs"
 
 PLATFORMS: list[str] = ["sensor"]
 
@@ -45,6 +49,12 @@ _BACKFILL_SCHEMA = vol.Schema(
         vol.Required("entry_id"): cv.string,
         vol.Required(ATTR_START_DATE): cv.date,
         vol.Optional(ATTR_END_DATE): cv.date,
+    }
+)
+
+_RECOMPUTE_COSTS_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
     }
 )
 
@@ -123,6 +133,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=_BACKFILL_SCHEMA,
         )
 
+    # Register the cost-recompute service. Same one-time-per-domain
+    # pattern as backfill.
+    if not hass.services.has_service(DOMAIN, SERVICE_RECOMPUTE_COSTS):
+        async def _async_handle_recompute_costs(call: ServiceCall) -> None:
+            entry_id: str = call.data["entry_id"]
+            target: LastgangCoordinator | None = hass.data.get(DOMAIN, {}).get(
+                entry_id
+            )
+            if target is None:
+                raise ValueError(f"Unknown config entry: {entry_id}")
+
+            tariffs = await hass.async_add_executor_job(
+                load_tariffs, hass.config.config_dir
+            )
+            if tariffs.is_empty:
+                raise ValueError(
+                    "No tariff data loaded — check "
+                    "<HA-config>/oberbueren_lastgang_tariffs.yaml"
+                )
+
+            total = 0
+            for messlinie in ACTIVE_MESSLINIEN:
+                total += await async_recompute_costs(
+                    hass,
+                    target.objekt_id,
+                    messlinie,
+                    target.friendly_name,
+                    tariffs,
+                )
+            _LOGGER.info(
+                "Recompute complete: %d hourly cost points written across "
+                "all categories for %s",
+                total, target.friendly_name,
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RECOMPUTE_COSTS,
+            _async_handle_recompute_costs,
+            schema=_RECOMPUTE_COSTS_SCHEMA,
+        )
+
     return True
 
 
@@ -136,7 +188,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Remove the service when no entries remain so it doesn't linger after
     # the integration is fully removed.
-    if not domain_data and hass.services.has_service(DOMAIN, SERVICE_BACKFILL):
-        hass.services.async_remove(DOMAIN, SERVICE_BACKFILL)
+    if not domain_data:
+        for svc in (SERVICE_BACKFILL, SERVICE_RECOMPUTE_COSTS):
+            if hass.services.has_service(DOMAIN, svc):
+                hass.services.async_remove(DOMAIN, svc)
 
     return True

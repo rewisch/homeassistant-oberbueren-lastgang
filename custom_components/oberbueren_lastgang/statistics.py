@@ -24,13 +24,14 @@ the previous-hour anchor — so contiguous imports are recommended.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
+    statistics_during_period,
 )
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.core import HomeAssistant
@@ -223,14 +224,24 @@ async def _async_import_costs(
     friendly_name: str,
     hourly_kwh: list[tuple[datetime, float]],
     tariffs: TariffDatabase,
+    *,
+    fresh_anchor: bool = False,
 ) -> None:
-    """Compute and write all six cost statistics for one batch of hours."""
+    """Compute and write all six cost statistics for one batch of hours.
+
+    By default the cumulative sum continues from whatever was previously
+    stored for each cost stat (the same anchoring behavior the kWh path
+    uses). When ``fresh_anchor=True`` we instead start the running sum
+    at zero — used by ``async_recompute_costs`` which rebuilds the
+    entire chain from the first available hour, making the prior
+    stored sums irrelevant.
+    """
     per_category = compute_hourly_costs(hourly_kwh, tariffs)
 
     for category_key in (*COST_CATEGORY_KEYS, COST_TOTAL_KEY):
         stat_id = build_cost_statistic_id(objekt_id, category_key)
         meta = build_cost_statistic_metadata(objekt_id, category_key, friendly_name)
-        running = await async_get_last_sum(hass, stat_id)
+        running = 0.0 if fresh_anchor else await async_get_last_sum(hass, stat_id)
 
         points: list[StatisticData] = []
         for hour_utc, increment in per_category[category_key]:
@@ -243,8 +254,67 @@ async def _async_import_costs(
 
     _LOGGER.info(
         "Imported cost statistics for objekt_%s across %d categories "
-        "(%d hourly points each)",
+        "(%d hourly points each, fresh_anchor=%s)",
         objekt_id,
         len(COST_CATEGORY_KEYS) + 1,
         len(hourly_kwh),
+        fresh_anchor,
     )
+
+
+async def async_recompute_costs(
+    hass: HomeAssistant,
+    objekt_id: int | str,
+    messlinie: Messlinie,
+    friendly_name: str,
+    tariffs: TariffDatabase,
+) -> int:
+    """Rebuild cost statistics from existing kWh statistics — no API calls.
+
+    Reads every available hourly kWh ``change`` from the recorder for
+    the given Messlinie, applies the current tariff database, and
+    overwrites the six cost statistics from scratch (anchor = 0). Use
+    this after editing the tariff file or when the cost feature was
+    enabled on top of pre-existing kWh data.
+
+    Returns the number of hourly points recomputed; 0 if no kWh stats
+    exist for the Messlinie or the Messlinie is non-consumption.
+    """
+    if messlinie.direction != "consumption":
+        return 0
+
+    kwh_id = build_statistic_id(objekt_id, messlinie)
+
+    # Pull every kWh hour available — we don't expose a date filter
+    # because partial recompute leaves the cumulative sums of *later*
+    # untouched hours mis-anchored, which is much worse than the cost
+    # of one extra DB scan.
+    very_early = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    far_future = datetime.now(tz=timezone.utc) + timedelta(days=1)
+    recorder = get_instance(hass)
+    rows = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass, very_early, far_future,
+        {kwh_id}, "hour", None, {"change"},
+    )
+    raw_rows = rows.get(kwh_id, [])
+    if not raw_rows:
+        _LOGGER.warning(
+            "No kWh statistics found for %s — nothing to recompute", kwh_id
+        )
+        return 0
+
+    hourly_kwh: list[tuple[datetime, float]] = []
+    for row in raw_rows:
+        start = row.get("start")
+        # Some recorder versions deliver epoch floats here.
+        if not isinstance(start, datetime):
+            start = datetime.fromtimestamp(float(start), tz=timezone.utc)
+        change = row.get("change")
+        hourly_kwh.append((start, float(change) if change is not None else 0.0))
+
+    await _async_import_costs(
+        hass, objekt_id, friendly_name, hourly_kwh, tariffs,
+        fresh_anchor=True,
+    )
+    return len(hourly_kwh)

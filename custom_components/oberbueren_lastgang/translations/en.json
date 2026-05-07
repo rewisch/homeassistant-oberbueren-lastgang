@@ -45,6 +45,16 @@
           "description": "Last day (inclusive). Defaults to start date."
         }
       }
+    },
+    "recompute_costs": {
+      "name": "Recompute costs",
+      "description": "Rebuilds the cost statistics from existing kWh data (no API calls). Use after editing the tariff file or first enabling the cost feature.",
+      "fields": {
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Which configured account to recompute."
+        }
+      }
     }
   }
 }

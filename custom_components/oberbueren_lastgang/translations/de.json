@@ -45,6 +45,16 @@
           "description": "Letzter Tag (inklusiv). Default: gleiches Datum wie Start."
         }
       }
+    },
+    "recompute_costs": {
+      "name": "Kosten neu berechnen",
+      "description": "Berechnet die Kosten-Statistiken aus den bereits vorhandenen kWh-Daten neu (ohne API-Aufrufe). Nutze diesen Service nach Tarifänderungen oder nach erstmaliger Aktivierung der Kosten-Funktion.",
+      "fields": {
+        "entry_id": {
+          "name": "Config Entry",
+          "description": "Welche konfigurierte Anmeldung soll neu berechnet werden."
+        }
+      }
     }
   }
 }

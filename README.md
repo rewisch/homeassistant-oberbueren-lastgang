@@ -51,6 +51,24 @@ cumulative kWh sums build up correctly. The integration fetches one HTTP
 request per day, so a full year takes ~365 requests. Be a polite citizen
 and don't hammer the API.
 
+## Recomputing costs without re-fetching
+
+If you edit `oberbueren_lastgang_tariffs.yaml` (price change, new tariff
+period, fixed a typo), or you've imported kWh data on a version that
+predates the cost feature, you can rebuild **all** cost statistics
+from the existing kWh stats — no HTTP requests:
+
+```yaml
+service: oberbueren_lastgang.recompute_costs
+data:
+  entry_id: 01HX9Z7E8K2QY7CDXR...
+```
+
+The service reads every available hourly kWh increment from HA's
+recorder, applies the current tariff file, and overwrites the six
+cost statistics from scratch (anchor = 0, fresh cumulative chain).
+It's safe to run repeatedly.
+
 ## What ends up in HA
 
 ### Long-term statistics (External Statistics)
