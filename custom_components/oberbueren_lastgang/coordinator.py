@@ -13,8 +13,9 @@ that the time trigger and the backfill service both call.
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -22,8 +23,19 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import ApiError, AuthError, OberbuerenClient
 from .const import ACTIVE_MESSLINIEN, CONF_METERINGCODE, CONF_NAME, CONF_OBJEKT_ID
-from .statistics import async_import_many
+from .statistics import (
+    async_get_last_imported_hour,
+    async_import_many,
+    build_statistic_id,
+)
 from .tariffs import load_tariffs
+
+# Cap auto catch-up so an HA host that's been off for months doesn't
+# unexpectedly fire a year of API requests on next boot. Bigger gaps
+# require an explicit ``backfill`` service call from the user.
+_MAX_AUTO_CATCHUP_DAYS = 30
+
+_LOCAL_TZ = ZoneInfo("Europe/Zurich")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,15 +117,60 @@ class LastgangCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return total_imported
 
-    async def async_import_yesterday(self) -> int:
-        """Fetch and import the data for the previous local day."""
-        # We use the local "today" relative to the HA host; the API operates
-        # in Europe/Zurich anyway and serves whole days.
-        from datetime import datetime
-        today = datetime.now().date()
+    async def async_catch_up(self) -> int:
+        """Fetch any days missing between the last imported day and yesterday.
+
+        Idempotent: returns immediately if data is already up to date.
+        Used by both the daily 06:00 trigger and the startup hook so a
+        host that was offline at the scheduled time still picks up the
+        missed days as soon as it comes back online.
+
+        First-install (no prior data) is handled conservatively: we
+        don't know how far back the user wants history, so we log a
+        hint and return without fetching anything. Run the ``backfill``
+        service for the initial population.
+
+        Gaps larger than ``_MAX_AUTO_CATCHUP_DAYS`` (default 30) are
+        also rejected; backfill is the right tool for those.
+        """
+        kwh_id = build_statistic_id(self.objekt_id, ACTIVE_MESSLINIEN[0])
+        last_hour = await async_get_last_imported_hour(self.hass, kwh_id)
+
+        today = datetime.now(tz=_LOCAL_TZ).date()
         yesterday = today - timedelta(days=1)
-        _LOGGER.debug("Daily fetch: importing %s", yesterday)
-        return await self.async_import_range(yesterday, yesterday)
+
+        if last_hour is None:
+            _LOGGER.info(
+                "No prior kWh data for %s — skipping catch-up. Use the "
+                "backfill service to populate an initial date range.",
+                kwh_id,
+            )
+            return 0
+
+        last_day = last_hour.astimezone(_LOCAL_TZ).date()
+        if last_day >= yesterday:
+            _LOGGER.debug(
+                "Catch-up: already up to date (last imported day: %s)",
+                last_day,
+            )
+            return 0
+
+        gap_start = last_day + timedelta(days=1)
+        gap_days = (yesterday - gap_start).days + 1
+        if gap_days > _MAX_AUTO_CATCHUP_DAYS:
+            _LOGGER.warning(
+                "Last imported day was %s — gap of %d days exceeds the "
+                "auto catch-up limit (%d). Use the backfill service to "
+                "fill historical gaps manually.",
+                last_day, gap_days, _MAX_AUTO_CATCHUP_DAYS,
+            )
+            return 0
+
+        _LOGGER.info(
+            "Catch-up: importing %s through %s (%d day(s))",
+            gap_start, yesterday, gap_days,
+        )
+        return await self.async_import_range(gap_start, yesterday)
 
     async def _async_update_data(self) -> dict[str, Any]:
         # The base class wants an _async_update_data; we don't do periodic

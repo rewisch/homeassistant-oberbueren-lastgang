@@ -148,6 +148,56 @@ async def async_get_last_sum(hass: HomeAssistant, statistic_id: str) -> float:
     return float(last_sum) if last_sum is not None else 0.0
 
 
+async def async_get_last_imported_hour(
+    hass: HomeAssistant, statistic_id: str
+) -> datetime | None:
+    """Return the timestamp of the most recently stored hour, or None."""
+    recorder = get_instance(hass)
+    last_stats = await recorder.async_add_executor_job(
+        get_last_statistics,
+        hass,
+        1,
+        statistic_id,
+        True,
+        {"sum"},
+    )
+    rows = last_stats.get(statistic_id)
+    if not rows:
+        return None
+    start = rows[0].get("start")
+    if isinstance(start, datetime):
+        return start
+    if start is None:
+        return None
+    return datetime.fromtimestamp(float(start), tz=timezone.utc)
+
+
+async def _async_read_existing_hourly_kwh(
+    hass: HomeAssistant, statistic_id: str
+) -> dict[datetime, float]:
+    """Pull every stored hourly kWh ``change`` for one statistic.
+
+    Used by the overlap-rebuild path so we can splice new days into a
+    chronologically-correct cumulative chain. Returns an empty dict if
+    nothing exists yet.
+    """
+    very_early = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    far_future = datetime.now(tz=timezone.utc) + timedelta(days=1)
+    recorder = get_instance(hass)
+    rows = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass, very_early, far_future,
+        {statistic_id}, "hour", None, {"change"},
+    )
+    out: dict[datetime, float] = {}
+    for row in rows.get(statistic_id, []):
+        start = row.get("start")
+        if not isinstance(start, datetime):
+            start = datetime.fromtimestamp(float(start), tz=timezone.utc)
+        out[start] = float(row.get("change") or 0.0)
+    return out
+
+
 def build_cost_statistic_id(objekt_id: int | str, category_key: str) -> str:
     """Statistic ID for one cost category (or ``total``)."""
     return f"{DOMAIN}:objekt_{objekt_id}_cost_{category_key}"
@@ -198,50 +248,88 @@ async def async_import_many(
 ) -> int:
     """Import multiple days, plus matching cost statistics if tariffs given.
 
-    Days are processed in input order (caller's responsibility to feed
-    them chronologically). One previous-sum lookup per statistic_id, then
-    a single ``async_add_external_statistics`` call per series.
+    Picks one of two strategies based on whether the new data overlaps
+    pre-existing statistics:
 
-    Returns the number of hourly kWh points written. Cost statistics are
-    written for the same hours; their count equals the kWh count.
+      * **Append** (fast): new hours are strictly after every stored
+        hour. Anchor on ``last_sum``, build cumulative chain forward.
+        This is the daily-import path and stays cheap.
+
+      * **Rebuild** (safe): new hours overlap or precede stored hours.
+        Read every existing hourly kWh ``change`` from the recorder,
+        merge with the new data (new wins on collision), sort
+        chronologically, and re-emit the entire cumulative chain from
+        zero. This makes re-running ``backfill`` over an old window
+        idempotent — no more "Fix issues in Statistics" workaround.
+
+    Returns the number of *new* hourly points the caller's responses
+    produced. (Rebuild may write many more rows than that to maintain
+    chain integrity, but the return value still reflects the size of
+    the input.)
     """
-    # ---- kWh series ------------------------------------------------------
     kwh_id = build_statistic_id(objekt_id, messlinie)
     kwh_meta = build_statistic_metadata(objekt_id, messlinie, friendly_name)
-    kwh_running = await async_get_last_sum(hass, kwh_id)
 
-    # Flatten all responses to a single chronological hourly series. We
-    # also keep the kWh points around for cost computation below — there
-    # is no point re-doing the 15-min→hour aggregation a second time.
-    hourly_kwh: list[tuple[datetime, float]] = []
+    # Flatten responses to one chronological hourly series.
+    new_hourly: list[tuple[datetime, float]] = []
     for response in responses:
-        hourly_kwh.extend(aggregate_to_hourly_kwh(response))
+        new_hourly.extend(aggregate_to_hourly_kwh(response))
 
-    if not hourly_kwh:
+    if not new_hourly:
         return 0
+    new_hourly.sort()  # cheap and ensures the rebuild path's anchor logic
 
-    kwh_points: list[StatisticData] = []
-    for hour_utc, kwh in hourly_kwh:
-        kwh_running += kwh
-        kwh_points.append(
-            StatisticData(start=hour_utc, sum=kwh_running, state=kwh_running)
+    last_existing = await async_get_last_imported_hour(hass, kwh_id)
+    overlap = last_existing is not None and new_hourly[0][0] <= last_existing
+
+    if overlap:
+        merged = await _async_read_existing_hourly_kwh(hass, kwh_id)
+        for hour, kwh in new_hourly:
+            merged[hour] = kwh
+        merged_pairs = sorted(merged.items())
+
+        running = 0.0
+        kwh_points: list[StatisticData] = []
+        for hour_utc, kwh in merged_pairs:
+            running += kwh
+            kwh_points.append(
+                StatisticData(start=hour_utc, sum=running, state=running)
+            )
+        async_add_external_statistics(hass, kwh_meta, kwh_points)
+        _LOGGER.info(
+            "Imported %d hourly points for %s via REBUILD "
+            "(merged %d new + %d existing, final sum %.3f kWh)",
+            len(new_hourly), kwh_id, len(new_hourly),
+            len(merged_pairs) - len(new_hourly), running,
         )
-    async_add_external_statistics(hass, kwh_meta, kwh_points)
-    _LOGGER.info(
-        "Imported %d hourly points for %s (final sum: %.3f kWh)",
-        len(kwh_points), kwh_id, kwh_running,
-    )
+        cost_input = merged_pairs
+        cost_fresh_anchor = True
+    else:
+        running = await async_get_last_sum(hass, kwh_id)
+        kwh_points = []
+        for hour_utc, kwh in new_hourly:
+            running += kwh
+            kwh_points.append(
+                StatisticData(start=hour_utc, sum=running, state=running)
+            )
+        async_add_external_statistics(hass, kwh_meta, kwh_points)
+        _LOGGER.info(
+            "Imported %d hourly points for %s via APPEND "
+            "(final sum %.3f kWh)",
+            len(new_hourly), kwh_id, running,
+        )
+        cost_input = new_hourly
+        cost_fresh_anchor = False
 
-    # ---- Cost series -----------------------------------------------------
-    # Only consumption Messlinien have cost semantics in V1. Production
-    # would need a separate tariff structure (selling rate) which we
-    # don't model yet.
+    # Cost series — only on consumption Messlinien (Einspeisung would
+    # need a separate selling-rate tariff that we don't model yet).
     if tariffs is not None and messlinie.direction == "consumption":
         await _async_import_costs(
-            hass, objekt_id, friendly_name, hourly_kwh, tariffs
+            hass, objekt_id, friendly_name, cost_input, tariffs,
+            fresh_anchor=cost_fresh_anchor,
         )
 
-    return len(kwh_points)
+    return len(new_hourly)
 
 
 async def _async_import_costs(
@@ -314,20 +402,11 @@ async def async_recompute_costs(
 
     kwh_id = build_statistic_id(objekt_id, messlinie)
 
-    # Pull every kWh hour available — we don't expose a date filter
-    # because partial recompute leaves the cumulative sums of *later*
-    # untouched hours mis-anchored, which is much worse than the cost
-    # of one extra DB scan.
-    very_early = datetime(2020, 1, 1, tzinfo=timezone.utc)
-    far_future = datetime.now(tz=timezone.utc) + timedelta(days=1)
-    recorder = get_instance(hass)
-    rows = await recorder.async_add_executor_job(
-        statistics_during_period,
-        hass, very_early, far_future,
-        {kwh_id}, "hour", None, {"change"},
-    )
-    raw_rows = rows.get(kwh_id, [])
-    if not raw_rows:
+    # Partial recompute is unsafe (it'd leave the cumulative sums of
+    # *later* untouched hours mis-anchored), so we always rebuild over
+    # all available data.
+    existing = await _async_read_existing_hourly_kwh(hass, kwh_id)
+    if not existing:
         _LOGGER.warning(
             "No kWh statistics found for %s — nothing to recompute. "
             "Check Developer Tools → Statistics whether this ID exists.",
@@ -335,15 +414,7 @@ async def async_recompute_costs(
         )
         return 0
 
-    hourly_kwh: list[tuple[datetime, float]] = []
-    for row in raw_rows:
-        start = row.get("start")
-        # Some recorder versions deliver epoch floats here.
-        if not isinstance(start, datetime):
-            start = datetime.fromtimestamp(float(start), tz=timezone.utc)
-        change = row.get("change")
-        hourly_kwh.append((start, float(change) if change is not None else 0.0))
-
+    hourly_kwh = sorted(existing.items())
     total_kwh = sum(k for _, k in hourly_kwh)
     _LOGGER.info(
         "Recompute kWh source for %s: %d hourly rows, %.3f kWh total, "

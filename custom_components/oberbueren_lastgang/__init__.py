@@ -12,6 +12,7 @@ This is the user's escape hatch for the initial multi-month import.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 
@@ -77,13 +78,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = LastgangCoordinator(hass, entry, client)
 
-    # Schedule the daily import. async_track_time_change uses HA's local
-    # timezone, which on a Swiss installation will be Europe/Zurich —
-    # matching the upstream API's day boundaries. Returns an unsub callable
-    # which we register with the entry so it's cleaned up on unload.
+    # Daily trigger uses the coordinator's catch-up routine rather than
+    # a literal "fetch yesterday" — that way a host that was offline
+    # for a few days still imports the gap on the very next 06:00 fire,
+    # without relying on the startup hook below to also catch it.
     async def _daily_trigger(_now: datetime) -> None:
         try:
-            await coordinator.async_import_yesterday()
+            await coordinator.async_catch_up()
         except AuthError as err:
             _LOGGER.error("Auth failed during daily import: %s", err)
         except ApiError as err:
@@ -93,6 +94,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, _daily_trigger, hour=DEFAULT_POLL_HOUR, minute=0, second=0
     )
     entry.async_on_unload(unsub_daily)
+
+    # Startup catch-up: if HA was offline at 06:00, the daily trigger
+    # didn't fire — so on every boot we also run catch-up to cover any
+    # missed days. Run as a background task with a short delay so the
+    # rest of HA startup (recorder, frontend, etc.) finishes first.
+    async def _startup_catch_up() -> None:
+        await asyncio.sleep(30)
+        try:
+            count = await coordinator.async_catch_up()
+            if count > 0:
+                _LOGGER.info(
+                    "Startup catch-up imported %d hourly point(s) for %s",
+                    count, coordinator.friendly_name,
+                )
+        except AuthError as err:
+            _LOGGER.warning("Startup catch-up auth failed: %s", err)
+        except ApiError as err:
+            _LOGGER.warning("Startup catch-up failed: %s", err)
+
+    entry.async_create_background_task(
+        hass, _startup_catch_up(), name=f"{DOMAIN}.startup_catchup"
+    )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 

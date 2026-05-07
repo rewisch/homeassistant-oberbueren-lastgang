@@ -33,6 +33,16 @@ and shows up in the Energy Dashboard.
 Once configured, the integration imports yesterday's data every morning
 at **06:00 local time**. No further action required.
 
+If your HA host was offline at 06:00 (or for several days), a startup
+catch-up at every boot detects the gap and fetches the missing days
+automatically — capped at 30 days. Longer gaps need a manual `backfill`
+call.
+
+Re-running `backfill` over a window that's already in HA is **safe**:
+the integration detects the overlap, merges the new data with what's
+already stored, and rebuilds the cumulative sum chain from scratch.
+No more manual "Fix issues in Statistics" workaround.
+
 ## Initial backfill
 
 The first time you set it up you'll likely want to import several months
@@ -198,9 +208,13 @@ import) is already direction-agnostic.
 
 ## Limitations
 
-* Re-running backfill over a window that's already imported re-anchors
-  the running sum; for clean re-imports clear the existing statistics
-  first via **Developer Tools → Statistics → Fix issues**.
-* The daily import runs at 06:00 local. If your HA host is offline that
-  morning, that day is missed — re-import via the backfill service.
-* Only the `Bezug` Messlinie is wired up by default. See above.
+* **Initial population** is a manual step — run the `backfill` service
+  with the date range you want. Auto catch-up only fills gaps relative
+  to existing data, not the very first import.
+* **Auto catch-up cap** is 30 days. If your HA host has been offline
+  for longer than that, run `backfill` for the older portion. (This
+  exists so a long-offline host doesn't accidentally fire several
+  hundred API requests in a row on first boot.)
+* **Only the `Bezug` Messlinie is active** out of the box. Adding
+  Einspeisung is one line in `const.py` plus a separate selling-rate
+  tariff (not yet modeled). See `MESSLINIE_EINSPEISUNG` in the source.
