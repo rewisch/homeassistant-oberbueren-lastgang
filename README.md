@@ -1,91 +1,69 @@
-# Strom Oberbüren Lastgang — Home Assistant Integration
+# Strom Oberbüren Lastgang — Home-Assistant-Integration
 
-A custom integration that pulls 15-minute electricity load-curve data from
-[strom.oberbueren.ch](https://www.strom.oberbueren.ch) into Home Assistant
-— for the Energy Dashboard, for cost tracking, and for Lovelace dashboards.
+Eine benutzerdefinierte Integration, die 15-Minuten-Stromlastgangdaten von
+[strom.oberbueren.ch](https://www.strom.oberbueren.ch?utm_source=chatgpt.com) in Home Assistant importiert
+— für das Energie-Dashboard, für die Kostenverfolgung und für Lovelace-Dashboards.
 
-## Features
+## Funktionen
 
-* **Long-term statistics** — daily import of yesterday's 15-min samples,
-  bucketed to hourly kWh, written as External Statistics so they survive
-  the recorder purge and show up in the **Energy Dashboard** (kWh + CHF).
-* **Cost calculation** — every imported hour is costed against a
-  user-editable Swiss tariff file (HT/NT, Netznutzung, Energiebezug,
-  Abgaben, Messtarif), with per-category breakdown and `cost_total` for
-  the Energy Dashboard's price field.
-* **18 dashboard sensors per meter** — Verbrauch & Kosten over Aktueller
-  Monat / Letzter Monat / Aktuelles Jahr / Letztes Jahr / Gestern /
-  Letzte 7 Tage / Letzte 30 Tage, plus Prognose Monat, Prognose Jahr,
-  Ø Tagesverbrauch, Ø Preis.
-* **Auto catch-up** — if HA was offline at the daily 06:00 fetch (or for
-  several days), missed days are imported automatically on the next
-  startup or at the next 06:00 trigger.
-* **Safe re-runs** — re-running `backfill` over data already in HA
-  detects the overlap, merges, and rebuilds the cumulative sum chain
-  cleanly — no more "Fix issues in Statistics" workaround.
+* **Langzeitstatistiken** — täglicher Import der 15-Minuten-Werte des Vortags,
+  zu stündlichen kWh zusammengefasst und als External Statistics gespeichert, sodass sie die Recorder-Bereinigung überstehen und im **Energie-Dashboard** erscheinen (kWh + CHF).
+* **Kostenberechnung** — jede importierte Stunde wird anhand einer vom Benutzer bearbeitbaren Schweizer Tarifdatei berechnet (HT/NT, Netznutzung, Energiebezug, Abgaben, Messtarif), inklusive Aufschlüsselung nach Kategorien und `cost_total` für das Preisfeld des Energie-Dashboards.
+* **18 Dashboard-Sensoren pro Zähler** — Verbrauch & Kosten für Aktueller Monat / Letzter Monat / Aktuelles Jahr / Letztes Jahr / Gestern / Letzte 7 Tage / Letzte 30 Tage sowie Monatsprognose, Jahresprognose, Ø Tagesverbrauch, Ø Preis.
+* **Automatisches Nachholen fehlender Daten** — wenn HA beim täglichen Abruf um 06:00 Uhr offline war (oder mehrere Tage), werden fehlende Tage automatisch beim nächsten Start oder beim nächsten 06:00-Trigger importiert.
+* **Sichere erneute Ausführung** — erneutes Ausführen von `backfill` über bereits in HA vorhandene Daten erkennt Überschneidungen, führt die Daten zusammen und erstellt die kumulative Summenkette sauber neu — kein „Fix issues in Statistics“-Workaround mehr nötig.
 
 ## Installation
 
-### Via HACS (recommended)
+### Über HACS (empfohlen)
 
 1. In HACS: **Integrationen → ⋮ Menü → Benutzerdefinierte Repositories**.
 2. Repository: `https://github.com/rewisch/homeassistant-oberbueren-lastgang`,
    Kategorie: **Integration**, hinzufügen.
-3. Die Integration "Strom Oberbüren Lastgang" wird in HACS angezeigt →
+3. Die Integration „Strom Oberbüren Lastgang“ erscheint in HACS →
    **Herunterladen**.
 4. Home Assistant neu starten.
-5. **Einstellungen → Geräte & Dienste → Integration hinzufügen → "Strom
-   Oberbüren Lastgang"**.
-6. Email + Passwort eingeben, dann `objektId` und `meteringcode` deines
-   Zählers (beides findest du in der URL der Lastgangdaten-Seite im
-   Browser).
+5. **Einstellungen → Geräte & Dienste → Integration hinzufügen → „Strom Oberbüren Lastgang“**.
+6. E-Mail + Passwort eingeben, dann `objektId` und `meteringcode` deines Zählers angeben
+   (beides findest du in der URL der Lastgangdaten-Seite im Browser).
 
 ### Manuelle Installation
 
-1. `custom_components/oberbueren_lastgang/` aus diesem Repo nach
+1. `custom_components/oberbueren_lastgang/` aus diesem Repository nach
    `<config>/custom_components/` deiner HA-Installation kopieren.
 2. Home Assistant neu starten.
-3. Schritte 5–6 oben.
+3. Schritte 5–6 oben ausführen.
 
-## Daily auto-import
+## Täglicher Auto-Import
 
-Once configured, the integration imports yesterday's data every morning
-at **06:00 local time**. No further action required.
+Nach der Einrichtung importiert die Integration jeden Morgen um
+**06:00 Uhr Ortszeit** automatisch die Daten des Vortags.
+Keine weitere Aktion erforderlich.
 
-If your HA host was offline at 06:00 (or for several days), a startup
-catch-up at every boot detects the gap and fetches the missing days
-automatically — capped at 30 days. Longer gaps need a manual `backfill`
-call.
+Falls dein HA-Host um 06:00 Uhr offline war (oder mehrere Tage), erkennt ein Catch-up beim Start bei jedem Bootvorgang die Lücke und lädt die fehlenden Tage automatisch nach — begrenzt auf 30 Tage. Längere Ausfälle benötigen einen manuellen `backfill`-Aufruf.
 
-Re-running `backfill` over a window that's already in HA is **safe**:
-the integration detects the overlap, merges the new data with what's
-already stored, and rebuilds the cumulative sum chain from scratch.
-No more manual "Fix issues in Statistics" workaround.
+Ein erneutes Ausführen von `backfill` über einen Zeitraum, der bereits in HA vorhanden ist, ist **sicher**:
+Die Integration erkennt die Überschneidung, führt die neuen Daten mit den bereits gespeicherten zusammen und erstellt die kumulative Summenkette vollständig neu.
+Kein manueller „Fix issues in Statistics“-Workaround mehr nötig.
 
-## Initial backfill
+## Initiales Backfill
 
-The first time you set it up you'll likely want to import several months
-or years of history. Use the `oberbueren_lastgang.backfill` service:
+Beim ersten Einrichten möchtest du wahrscheinlich mehrere Monate oder Jahre an Verlaufsdaten importieren. Verwende dafür den Dienst `oberbueren_lastgang.backfill`:
 
 ```yaml
 service: oberbueren_lastgang.backfill
 data:
-  entry_id: 01HX9Z7E8K2QY7CDXR...    # see Settings → … → Show entry ID
+  entry_id: 01HX9Z7E8K2QY7CDXR...    # siehe Einstellungen → … → Show entry ID
   start_date: 2024-01-01
   end_date: 2024-12-31
 ```
 
-Tip: backfill in chronological chunks (e.g. one year at a time) so the
-cumulative kWh sums build up correctly. The integration fetches one HTTP
-request per day, so a full year takes ~365 requests. Be a polite citizen
-and don't hammer the API.
+Tipp: Führe das Backfill in chronologischen Blöcken aus (z. B. jeweils ein Jahr), damit sich die kumulativen kWh-Summen korrekt aufbauen. Die Integration sendet eine HTTP-Anfrage pro Tag, daher benötigt ein ganzes Jahr etwa 365 Anfragen. Sei höflich und überlaste die API nicht.
 
-## Recomputing costs without re-fetching
+## Kosten neu berechnen ohne erneuten Download
 
-If you edit `oberbueren_lastgang_tariffs.yaml` (price change, new tariff
-period, fixed a typo), or you've imported kWh data on a version that
-predates the cost feature, you can rebuild **all** cost statistics
-from the existing kWh stats — no HTTP requests:
+Wenn du `oberbueren_lastgang_tariffs.yaml` bearbeitest
+(Preisänderung, neue Tarifperiode, Tippfehler korrigiert) oder kWh-Daten mit einer Version importiert hast, die die Kostenfunktion noch nicht unterstützte, kannst du **alle** Kostenstatistiken aus den vorhandenen kWh-Statistiken neu erstellen — ganz ohne HTTP-Anfragen:
 
 ```yaml
 service: oberbueren_lastgang.recompute_costs
@@ -93,87 +71,73 @@ data:
   entry_id: 01HX9Z7E8K2QY7CDXR...
 ```
 
-The service reads every available hourly kWh increment from HA's
-recorder, applies the current tariff file, and overwrites the six
-cost statistics from scratch (anchor = 0, fresh cumulative chain).
-It's safe to run repeatedly.
+Der Dienst liest jeden verfügbaren stündlichen kWh-Zuwachs aus dem HA-Recorder, wendet die aktuelle Tarifdatei an und überschreibt die sechs Kostenstatistiken vollständig neu (Anker = 0, frische kumulative Kette).
+Die Ausführung kann beliebig oft wiederholt werden.
 
-## What ends up in HA
+## Was in HA angelegt wird
 
-### Long-term statistics (External Statistics)
+### Langzeitstatistiken (External Statistics)
 
-For each configured meter the integration creates these statistics —
-they survive the recorder purge and back the Energy Dashboard:
+Für jeden konfigurierten Zähler erstellt die Integration folgende Statistiken — sie überstehen die Recorder-Bereinigung und bilden die Grundlage des Energie-Dashboards:
 
-| Statistic ID | Meaning | Unit |
-|--------------|---------|------|
-| `oberbueren_lastgang:objekt_<id>_bezug` | cumulative consumption | kWh |
-| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_wirkstrom` | Netznutzung Wirkstrom (HT/NT) | CHF |
-| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_grundgebuehr` | Grundgebühr (Fix) | CHF |
-| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_wirkstrom` | Energiebezug Wirkstrom (HT/NT) | CHF |
-| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_zuschlaege` | SDL + Stromreserve + Solidarisierte + Netzzuschlag | CHF |
-| `oberbueren_lastgang:objekt_<id>_cost_messtarif` | Messtarif (Fix) | CHF |
-| `oberbueren_lastgang:objekt_<id>_cost_total` | Sum of the above | CHF |
+| Statistik-ID                                                    | Bedeutung                                          | Einheit |
+| --------------------------------------------------------------- | -------------------------------------------------- | ------- |
+| `oberbueren_lastgang:objekt_<id>_bezug`                         | kumulativer Verbrauch                              | kWh     |
+| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_wirkstrom`    | Netznutzung Wirkstrom (HT/NT)                      | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_grundgebuehr` | Grundgebühr (Fix)                                  | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_wirkstrom`   | Energiebezug Wirkstrom (HT/NT)                     | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_zuschlaege`  | SDL + Stromreserve + Solidarisierte + Netzzuschlag | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_messtarif`                | Messtarif (Fix)                                    | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_total`                    | Summe aller obigen Werte                           | CHF     |
 
-For the Energy Dashboard: **Settings → Dashboards → Energy → Add
-consumption**, pick `…_bezug` for kWh and `…_cost_total` for the price.
+Für das Energie-Dashboard:
+**Einstellungen → Dashboards → Energie → Verbrauch hinzufügen**, dort `…_bezug` für kWh und `…_cost_total` als Preis auswählen.
 
-### Sensor entities (Lovelace-friendly)
+### Sensor-Entitäten (Lovelace-freundlich)
 
-In addition to the long-term statistics, 18 sensor entities per meter
-are created so you can drop them on dashboards or use in automations.
+Zusätzlich zu den Langzeitstatistiken werden pro Zähler 18 Sensor-Entitäten erstellt, die direkt in Dashboards oder Automationen verwendet werden können.
 
-**Period sensors** (kWh + CHF for each — 14 total):
+**Periodensensoren** (kWh + CHF für jede Periode — insgesamt 14):
 
-| Period | Coverage |
-|---|---|
-| Aktueller Monat | seit 1. des Monats bis jetzt |
-| Letzter Monat | kompletter Vormonat |
-| Aktuelles Jahr | seit 1. Januar bis jetzt |
-| Letztes Jahr | komplettes Vorjahr |
-| Gestern | voller Vortag |
-| Letzte 7 Tage | 7 komplette Tage bis und mit gestern |
-| Letzte 30 Tage | 30 komplette Tage bis und mit gestern |
+| Periode         | Abdeckung                                       |
+| --------------- | ----------------------------------------------- |
+| Aktueller Monat | seit dem 1. des Monats bis jetzt                |
+| Letzter Monat   | kompletter Vormonat                             |
+| Aktuelles Jahr  | seit dem 1. Januar bis jetzt                    |
+| Letztes Jahr    | komplettes Vorjahr                              |
+| Gestern         | vollständiger Vortag                            |
+| Letzte 7 Tage   | 7 vollständige Tage bis einschließlich gestern  |
+| Letzte 30 Tage  | 30 vollständige Tage bis einschließlich gestern |
 
-**Smart sensors** (4 derived):
+**Intelligente Sensoren** (4 abgeleitete Werte):
 
-| Sensor | Unit | Beschreibung |
-|---|---|---|
-| Prognose Monat | CHF | Linear hochgerechnet auf Monatsende |
-| Prognose Jahr | CHF | Linear hochgerechnet auf Jahresende |
-| Ø Tagesverbrauch (Monat) | kWh | Verbrauch ÷ Tage seit Monatsanfang |
-| Ø Preis (Monat) | Rp/kWh | Effektiver Preis incl. MwSt |
+| Sensor                   | Einheit | Beschreibung                        |
+| ------------------------ | ------- | ----------------------------------- |
+| Prognose Monat           | CHF     | Linear bis Monatsende hochgerechnet |
+| Prognose Jahr            | CHF     | Linear bis Jahresende hochgerechnet |
+| Ø Tagesverbrauch (Monat) | kWh     | Verbrauch ÷ Tage seit Monatsanfang  |
+| Ø Preis (Monat)          | Rp/kWh  | Effektiver Preis inkl. MwSt         |
 
-The Kosten period sensors expose a per-category breakdown via the
-entity attributes — open the entity in **Developer Tools → States**
-to see "wovon kommt der Betrag".
+Die Kosten-Periodensensoren stellen eine Aufschlüsselung nach Kategorien über die Entity-Attribute bereit — öffne die Entität unter **Entwicklerwerkzeuge → Zustände**, um zu sehen, „woher der Betrag kommt“.
 
-Refresh runs hourly so values catch up within an hour after the daily
-import lands at 06:00.
+Die Aktualisierung erfolgt stündlich, sodass die Werte innerhalb einer Stunde nach dem täglichen Import um 06:00 Uhr aktuell sind.
 
-## Tariff configuration (cost calculation)
+## Tarifkonfiguration (Kostenberechnung)
 
-The integration ships with the **current Oberbüren tariff** built in.
-On first setup it copies the bundled defaults to
-`<HA-config>/oberbueren_lastgang_tariffs.yaml` — you don't need to do
-anything for cost statistics to work out of the box.
+Die Integration enthält den **aktuellen Oberbüren-Tarif** bereits integriert.
+Beim ersten Setup kopiert sie die mitgelieferten Standardwerte nach
+`<HA-config>/oberbueren_lastgang_tariffs.yaml` — du musst nichts tun, damit die Kostenstatistiken sofort funktionieren.
 
-**Updates never overwrite your file.** Once that path exists, the
-integration leaves it alone forever, even across HACS upgrades. So you
-can edit prices, add tariff periods, or apply per-position MwSt
-overrides without worrying about losing your changes.
+**Updates überschreiben deine Datei niemals.** Sobald diese Datei existiert, lässt die Integration sie dauerhaft unangetastet — selbst bei HACS-Upgrades. Du kannst also Preise ändern, Tarifperioden hinzufügen oder positionsspezifische MwSt-Overrides anwenden, ohne Angst zu haben, deine Änderungen zu verlieren.
 
-When the canonical Oberbüren tariff changes (typically on 1 January),
-the bundled defaults in the repo are bumped — but your local file
-stays as-is. To pick up new defaults, either compare against the
-bundled `default_tariffs.yaml` and merge, or delete your file and
-restart HA to re-seed from the new default.
+Wenn sich der offizielle Oberbüren-Tarif ändert (typischerweise am 1. Januar), werden die mitgelieferten Standardwerte im Repository aktualisiert — deine lokale Datei bleibt jedoch unverändert.
+Um neue Standardwerte zu übernehmen, kannst du entweder die mitgelieferte `default_tariffs.yaml` vergleichen und Änderungen übernehmen oder deine Datei löschen und HA neu starten, damit sie aus den neuen Standardwerten neu erzeugt wird.
 
-The file format:
+Das Dateiformat:
 
 ```yaml
 - valid_from: 2026-01-01
-  valid_until: ~                    # ~ = currently active
+  valid_until: ~                    # ~ = aktuell aktiv
   mwst_default: 8.1
 
   netznutzung:
@@ -190,50 +154,41 @@ The file format:
     stromreserve: 0.41
     solidarisierte_kosten: 0.05
     netzzuschlag: 2.30
-    # netzzuschlag_mwst: 0          # optional per-position MwSt override
+    # netzzuschlag_mwst: 0          # optionaler positionsspezifischer MwSt-Override
 
   messtarif: 9.00                   # CHF/Monat
 ```
 
-Add more periods for tariff history (Swiss tariffs typically change on
-1 January). The integration looks up the right period for each imported
-hour, so backfilling old years gets correct historical pricing as long
-as the matching period is in the YAML.
+Füge weitere Perioden für historische Tarife hinzu
+(Schweizer Tarife ändern sich typischerweise am 1. Januar).
+Die Integration verwendet für jede importierte Stunde automatisch die passende Periode, sodass Backfills älterer Jahre korrekte historische Preise verwenden, sofern die passende Periode im YAML vorhanden ist.
 
-**HT/NT logic** (hard-coded): Mon–Fri 07:00–19:00 = HT, otherwise NT.
-Public holidays are *not* treated as NT — a holiday on a Wednesday at
-10:00 still counts as HT.
+**HT/NT-Logik** (fest eingebaut):
+Mo–Fr 07:00–19:00 = HT, sonst NT.
+Feiertage werden *nicht* als NT behandelt — ein Feiertag an einem Mittwoch um 10:00 Uhr zählt weiterhin als HT.
 
-The tariff file is re-read on every import, so edits take effect on
-the next daily fetch (or backfill) without an HA restart.
+Die Tarifdatei wird bei jedem Import neu eingelesen, sodass Änderungen ohne Neustart von HA beim nächsten täglichen Import (oder Backfill) wirksam werden.
 
-## Adding Einspeisung (PV feed-in) later
+## Spätere Aktivierung von Einspeisung (PV-Rückspeisung)
 
-The Messlinie abstraction in `const.py` already defines `1-1:2.5.0`
-(Einspeisung). To activate it: change
+Die Messlinien-Abstraktion in `const.py` definiert bereits `1-1:2.5.0` (Einspeisung). Um sie zu aktivieren, ändere:
 
 ```python
 ACTIVE_MESSLINIEN = (MESSLINIE_BEZUG,)
 ```
 
-to
+zu:
 
 ```python
 ACTIVE_MESSLINIEN = (MESSLINIE_BEZUG, MESSLINIE_EINSPEISUNG)
 ```
 
-and re-run a backfill. The rest of the pipeline (API client, statistics
-import) is already direction-agnostic.
+und führe anschließend ein Backfill erneut aus.
+Der Rest der Pipeline (API-Client, Statistikimport) arbeitet bereits richtungsunabhängig.
 
-## Limitations
+## Einschränkungen
 
-* **Initial population** is a manual step — run the `backfill` service
-  with the date range you want. Auto catch-up only fills gaps relative
-  to existing data, not the very first import.
-* **Auto catch-up cap** is 30 days. If your HA host has been offline
-  for longer than that, run `backfill` for the older portion. (This
-  exists so a long-offline host doesn't accidentally fire several
-  hundred API requests in a row on first boot.)
-* **Only the `Bezug` Messlinie is active** out of the box. Adding
-  Einspeisung is one line in `const.py` plus a separate selling-rate
-  tariff (not yet modeled). See `MESSLINIE_EINSPEISUNG` in the source.
+* **Die initiale Befüllung** ist ein manueller Schritt — führe den Dienst `backfill` mit dem gewünschten Datumsbereich aus. Das automatische Catch-up schließt nur Lücken relativ zu bereits vorhandenen Daten, nicht den allerersten Import.
+* **Das automatische Catch-up ist auf 30 Tage begrenzt.** Wenn dein HA-Host länger offline war, führe `backfill` für den älteren Zeitraum manuell aus.
+  (Diese Begrenzung existiert, damit ein lange offline gewesener Host beim ersten Start nicht versehentlich mehrere hundert API-Anfragen hintereinander auslöst.)
+* **Nur die Messlinie `Bezug` ist standardmäßig aktiv.** Das Hinzufügen von Einspeisung erfordert eine Zeile in `const.py` sowie einen separaten Einspeisetarif (der derzeit noch nicht modelliert ist). Siehe `MESSLINIE_EINSPEISUNG` im Quellcode.
