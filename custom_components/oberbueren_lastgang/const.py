@@ -59,3 +59,33 @@ MESSLINIE_EINSPEISUNG: Final = Messlinie(
 # Messlinien activated for V1. Extending this tuple is all that is needed to
 # also collect Einspeisung once the user has a PV system.
 ACTIVE_MESSLINIEN: Final = (MESSLINIE_BEZUG,)
+
+
+# ---------------------------------------------------------------------------
+# Cost-statistics IDs.
+#
+# These mirror the structure in tariffs.py: each ``StatCategory`` from there
+# corresponds to one external statistic here. ``cost_total`` is the sum and
+# is what users typically link in the Energy Dashboard.
+# ---------------------------------------------------------------------------
+
+COST_CATEGORY_KEYS: Final = (
+    "netznutzung_wirkstrom",
+    "netznutzung_grundgebuehr",
+    "energiebezug_wirkstrom",
+    "energiebezug_zuschlaege",
+    "messtarif",
+)
+
+COST_TOTAL_KEY: Final = "total"
+
+COST_CATEGORY_LABELS: Final = {
+    "netznutzung_wirkstrom": "Netznutzung Wirkstrom",
+    "netznutzung_grundgebuehr": "Netznutzung Grundgebühr",
+    "energiebezug_wirkstrom": "Energiebezug Wirkstrom",
+    "energiebezug_zuschlaege": "Abgaben & Zuschläge",
+    "messtarif": "Messtarif",
+    "total": "Gesamtkosten",
+}
+
+CURRENCY: Final = "CHF"

@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .api import ApiError, AuthError, OberbuerenClient
 from .const import ACTIVE_MESSLINIEN, CONF_METERINGCODE, CONF_NAME, CONF_OBJEKT_ID
 from .statistics import async_import_many
+from .tariffs import load_tariffs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,12 +87,19 @@ class LastgangCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current += timedelta(days=1)
 
             if responses:
+                # Re-load tariffs each import so the user can edit
+                # ``oberbueren_lastgang_tariffs.yaml`` between runs without
+                # restarting HA. Loading is a small file read; cheap.
+                tariffs = await self.hass.async_add_executor_job(
+                    load_tariffs, self.hass.config.config_dir
+                )
                 count = await async_import_many(
                     self.hass,
                     self.objekt_id,
                     messlinie,
                     self.friendly_name,
                     responses,
+                    tariffs=tariffs,
                 )
                 total_imported += count
 

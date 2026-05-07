@@ -53,20 +53,88 @@ and don't hammer the API.
 
 ## What ends up in HA
 
-For each configured meter the integration creates one **external
-statistic** per Messlinie:
+### Long-term statistics (External Statistics)
+
+For each configured meter the integration creates these statistics —
+they survive the recorder purge and back the Energy Dashboard:
 
 | Statistic ID | Meaning | Unit |
 |--------------|---------|------|
 | `oberbueren_lastgang:objekt_<id>_bezug` | cumulative consumption | kWh |
+| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_wirkstrom` | Netznutzung Wirkstrom (HT/NT) | CHF |
+| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_grundgebuehr` | Grundgebühr (Fix) | CHF |
+| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_wirkstrom` | Energiebezug Wirkstrom (HT/NT) | CHF |
+| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_zuschlaege` | SDL + Stromreserve + Solidarisierte + Netzzuschlag | CHF |
+| `oberbueren_lastgang:objekt_<id>_cost_messtarif` | Messtarif (Fix) | CHF |
+| `oberbueren_lastgang:objekt_<id>_cost_total` | Sum of the above | CHF |
 
-`has_sum=True` means it plugs straight into the Energy Dashboard:
-**Settings → Dashboards → Energy → Add consumption** and pick the
-statistic.
+For the Energy Dashboard: **Settings → Dashboards → Energy → Add
+consumption**, pick `…_bezug` for kWh and `…_cost_total` for the price.
 
-The 15-minute kW samples from the API are converted to kWh
-(`kWh = kW × 0.25h`) and aggregated into hourly buckets — that's the
-finest granularity HA's external statistics support.
+### Sensor entities (Lovelace-friendly)
+
+In addition to the long-term statistics, 8 sensor entities per meter
+are created so you can drop them on dashboards or use in automations:
+
+* `sensor.<name>_verbrauch_aktueller_monat`   (kWh)
+* `sensor.<name>_verbrauch_letzter_monat`     (kWh)
+* `sensor.<name>_verbrauch_aktuelles_jahr`    (kWh)
+* `sensor.<name>_verbrauch_letztes_jahr`      (kWh)
+* `sensor.<name>_kosten_aktueller_monat`      (CHF)
+* `sensor.<name>_kosten_letzter_monat`        (CHF)
+* `sensor.<name>_kosten_aktuelles_jahr`       (CHF)
+* `sensor.<name>_kosten_letztes_jahr`         (CHF)
+
+The Kosten sensors expose a per-category breakdown via the entity
+attributes — open the entity in **Developer Tools → States** to see
+"wovon kommt der Betrag".
+
+Refresh runs hourly so values catch up within an hour after the daily
+import lands at 06:00.
+
+## Tariff configuration (cost calculation)
+
+For cost statistics to be non-zero, drop a tariff YAML at
+`<HA-config>/oberbueren_lastgang_tariffs.yaml`. The integration writes
+a placeholder template the first time it sets up an entry — fill in
+the rates from your bill (excluding VAT, the integration applies the
+8.1% multiplier). Example:
+
+```yaml
+- valid_from: 2026-01-01
+  valid_until: ~                    # ~ = currently active
+  mwst_default: 8.1
+
+  netznutzung:
+    wirkstrom_ht: 10.40             # Rp/kWh
+    wirkstrom_nt: 10.00
+    grundgebuehr: 6.00              # CHF/Monat
+
+  energiebezug:
+    wirkstrom_ht: 17.30
+    wirkstrom_nt: 17.30
+
+  abgaben:
+    sdl_swissgrid: 0.27
+    stromreserve: 0.41
+    solidarisierte_kosten: 0.05
+    netzzuschlag: 2.30
+    # netzzuschlag_mwst: 0          # optional per-position MwSt override
+
+  messtarif: 9.00                   # CHF/Monat
+```
+
+Add more periods for tariff history (Swiss tariffs typically change on
+1 January). The integration looks up the right period for each imported
+hour, so backfilling old years gets correct historical pricing as long
+as the matching period is in the YAML.
+
+**HT/NT logic** (hard-coded): Mon–Fri 07:00–19:00 = HT, otherwise NT.
+Public holidays are *not* treated as NT — a holiday on a Wednesday at
+10:00 still counts as HT.
+
+The tariff file is re-read on every import, so edits take effect on
+the next daily fetch (or backfill) without an HA restart.
 
 ## Adding Einspeisung (PV feed-in) later
 

@@ -33,6 +33,9 @@ from .const import (
     SERVICE_BACKFILL,
 )
 from .coordinator import LastgangCoordinator
+from .tariffs import write_example_tariffs
+
+PLATFORMS: list[str] = ["sensor"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +86,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
+    # Drop a commented example tariffs file the first time we set up an
+    # entry, so the user can fill it in without having to read the README.
+    await hass.async_add_executor_job(
+        write_example_tariffs, hass.config.config_dir
+    )
+
+    # Bring up the sensor platform (8 aggregate entities per meter).
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     # Register the backfill service exactly once, on the first entry setup.
     if not hass.services.has_service(DOMAIN, SERVICE_BACKFILL):
         async def _async_handle_backfill(call: ServiceCall) -> None:
@@ -113,6 +125,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
     domain_data = hass.data.get(DOMAIN, {})
     domain_data.pop(entry.entry_id, None)
 

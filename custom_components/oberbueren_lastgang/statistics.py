@@ -36,7 +36,16 @@ from homeassistant.components.recorder.models import StatisticData, StatisticMet
 from homeassistant.core import HomeAssistant
 
 from .api import MessdatenResponse
-from .const import DOMAIN, Messlinie
+from .const import (
+    COST_CATEGORY_KEYS,
+    COST_CATEGORY_LABELS,
+    COST_TOTAL_KEY,
+    CURRENCY,
+    DOMAIN,
+    Messlinie,
+)
+from .cost import compute_hourly_costs
+from .tariffs import TariffDatabase
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -131,51 +140,25 @@ async def async_get_last_sum(hass: HomeAssistant, statistic_id: str) -> float:
     return float(last_sum) if last_sum is not None else 0.0
 
 
-async def async_import_messdaten(
-    hass: HomeAssistant,
+def build_cost_statistic_id(objekt_id: int | str, category_key: str) -> str:
+    """Statistic ID for one cost category (or ``total``)."""
+    return f"{DOMAIN}:objekt_{objekt_id}_cost_{category_key}"
+
+
+def build_cost_statistic_metadata(
     objekt_id: int | str,
-    messlinie: Messlinie,
+    category_key: str,
     friendly_name: str,
-    response: MessdatenResponse,
-) -> int:
-    """Convert and import one day's response into HA statistics.
-
-    Returns the number of hourly statistic points written.
-    """
-    statistic_id = build_statistic_id(objekt_id, messlinie)
-    metadata = build_statistic_metadata(objekt_id, messlinie, friendly_name)
-
-    hourly = aggregate_to_hourly_kwh(response)
-    if not hourly:
-        _LOGGER.warning(
-            "No usable samples in response for %s %s",
-            statistic_id,
-            response.intervals[0]["from"] if response.intervals else "<empty>",
-        )
-        return 0
-
-    # Anchor the running sum to whatever already exists for this stat_id
-    # *before* the first hour we're about to write. For backfill scenarios
-    # (importing an older window) this could over-count, so callers doing
-    # backfill must import in chronological order from the earliest day.
-    running_sum = await async_get_last_sum(hass, statistic_id)
-
-    points: list[StatisticData] = []
-    for hour_utc, kwh in hourly:
-        running_sum += kwh
-        points.append(
-            StatisticData(start=hour_utc, sum=running_sum, state=running_sum)
-        )
-
-    async_add_external_statistics(hass, metadata, points)
-    _LOGGER.info(
-        "Imported %d hourly points for %s (last hour: %s, total: %.3f kWh)",
-        len(points),
-        statistic_id,
-        points[-1]["start"].isoformat(),
-        running_sum,
+) -> StatisticMetaData:
+    label = COST_CATEGORY_LABELS.get(category_key, category_key)
+    return StatisticMetaData(
+        has_mean=False,
+        has_sum=True,
+        name=f"{friendly_name} {label}",
+        source=DOMAIN,
+        statistic_id=build_cost_statistic_id(objekt_id, category_key),
+        unit_of_measurement=CURRENCY,
     )
-    return len(points)
 
 
 async def async_import_many(
@@ -184,32 +167,84 @@ async def async_import_many(
     messlinie: Messlinie,
     friendly_name: str,
     responses: Iterable[MessdatenResponse],
+    tariffs: TariffDatabase | None = None,
 ) -> int:
-    """Import multiple days in chronological order, sharing one running sum.
+    """Import multiple days, plus matching cost statistics if tariffs given.
 
-    More efficient than calling async_import_messdaten in a loop because we
-    only look up the last sum once.
+    Days are processed in input order (caller's responsibility to feed
+    them chronologically). One previous-sum lookup per statistic_id, then
+    a single ``async_add_external_statistics`` call per series.
+
+    Returns the number of hourly kWh points written. Cost statistics are
+    written for the same hours; their count equals the kWh count.
     """
-    statistic_id = build_statistic_id(objekt_id, messlinie)
-    metadata = build_statistic_metadata(objekt_id, messlinie, friendly_name)
-    running_sum = await async_get_last_sum(hass, statistic_id)
+    # ---- kWh series ------------------------------------------------------
+    kwh_id = build_statistic_id(objekt_id, messlinie)
+    kwh_meta = build_statistic_metadata(objekt_id, messlinie, friendly_name)
+    kwh_running = await async_get_last_sum(hass, kwh_id)
 
-    points: list[StatisticData] = []
+    # Flatten all responses to a single chronological hourly series. We
+    # also keep the kWh points around for cost computation below — there
+    # is no point re-doing the 15-min→hour aggregation a second time.
+    hourly_kwh: list[tuple[datetime, float]] = []
     for response in responses:
-        for hour_utc, kwh in aggregate_to_hourly_kwh(response):
-            running_sum += kwh
-            points.append(
-                StatisticData(start=hour_utc, sum=running_sum, state=running_sum)
-            )
+        hourly_kwh.extend(aggregate_to_hourly_kwh(response))
 
-    if not points:
+    if not hourly_kwh:
         return 0
 
-    async_add_external_statistics(hass, metadata, points)
+    kwh_points: list[StatisticData] = []
+    for hour_utc, kwh in hourly_kwh:
+        kwh_running += kwh
+        kwh_points.append(
+            StatisticData(start=hour_utc, sum=kwh_running, state=kwh_running)
+        )
+    async_add_external_statistics(hass, kwh_meta, kwh_points)
     _LOGGER.info(
         "Imported %d hourly points for %s (final sum: %.3f kWh)",
-        len(points),
-        statistic_id,
-        running_sum,
+        len(kwh_points), kwh_id, kwh_running,
     )
-    return len(points)
+
+    # ---- Cost series -----------------------------------------------------
+    # Only consumption Messlinien have cost semantics in V1. Production
+    # would need a separate tariff structure (selling rate) which we
+    # don't model yet.
+    if tariffs is not None and messlinie.direction == "consumption":
+        await _async_import_costs(
+            hass, objekt_id, friendly_name, hourly_kwh, tariffs
+        )
+
+    return len(kwh_points)
+
+
+async def _async_import_costs(
+    hass: HomeAssistant,
+    objekt_id: int | str,
+    friendly_name: str,
+    hourly_kwh: list[tuple[datetime, float]],
+    tariffs: TariffDatabase,
+) -> None:
+    """Compute and write all six cost statistics for one batch of hours."""
+    per_category = compute_hourly_costs(hourly_kwh, tariffs)
+
+    for category_key in (*COST_CATEGORY_KEYS, COST_TOTAL_KEY):
+        stat_id = build_cost_statistic_id(objekt_id, category_key)
+        meta = build_cost_statistic_metadata(objekt_id, category_key, friendly_name)
+        running = await async_get_last_sum(hass, stat_id)
+
+        points: list[StatisticData] = []
+        for hour_utc, increment in per_category[category_key]:
+            running += increment
+            points.append(
+                StatisticData(start=hour_utc, sum=running, state=running)
+            )
+
+        async_add_external_statistics(hass, meta, points)
+
+    _LOGGER.info(
+        "Imported cost statistics for objekt_%s across %d categories "
+        "(%d hourly points each)",
+        objekt_id,
+        len(COST_CATEGORY_KEYS) + 1,
+        len(hourly_kwh),
+    )

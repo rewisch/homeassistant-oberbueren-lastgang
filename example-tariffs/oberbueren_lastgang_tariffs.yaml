@@ -1,0 +1,34 @@
+# Tarifkonfiguration für Strom Oberbüren Lastgang
+#
+# Diese Datei in den HA-Konfigurationsordner kopieren:
+#   <HA-config>/oberbueren_lastgang_tariffs.yaml
+#
+# Beim nächsten Daily-Import (oder Backfill) werden Kosten neu berechnet.
+# HA-Restart nicht nötig — die Integration lädt das File bei jedem Import.
+#
+# Werte ohne MwSt. Die Integration rechnet 8.1% drauf (per-Position
+# überschreibbar mit z.B. ``netzzuschlag_mwst: 0`` falls KEV-frei).
+#
+# Tarifänderungen: einfach unten einen weiteren Block anhängen mit neuem
+# ``valid_from`` und ggf. ``valid_until`` der bisherigen Periode setzen.
+
+- valid_from: 2026-01-01
+  valid_until: ~                 # noch gültig
+  mwst_default: 8.1
+
+  netznutzung:
+    wirkstrom_ht: 10.40          # Rp/kWh
+    wirkstrom_nt: 10.00          # Rp/kWh
+    grundgebuehr: 6.00           # CHF/Monat
+
+  energiebezug:
+    wirkstrom_ht: 17.30          # Rp/kWh
+    wirkstrom_nt: 17.30          # Rp/kWh
+
+  abgaben:
+    sdl_swissgrid: 0.27          # Rp/kWh
+    stromreserve: 0.41           # Rp/kWh
+    solidarisierte_kosten: 0.05  # Rp/kWh
+    netzzuschlag: 2.30           # Rp/kWh
+
+  messtarif: 9.00                # CHF/Monat
