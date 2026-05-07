@@ -1,0 +1,55 @@
+name: Release
+
+# Auto-creates a GitHub Release whenever a version tag is pushed (v*).
+# HACS reads the *latest* release from GitHub to determine the version
+# users see in the UI; without proper Releases it just falls back to
+# the commit hash, which is ugly and can't be compared between users.
+#
+# Also exposes a manual ``workflow_dispatch`` trigger to retroactively
+# create releases for older tags (Actions tab → Release → Run workflow).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.3.2). Leave blank when run from a tag push."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.value }}
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.tag.outputs.value }}"
+          # Don't fail the workflow if a release already exists — that
+          # makes manual re-runs idempotent.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release for $tag already exists — skipping."
+          else
+            gh release create "$tag" \
+              --title "$tag" \
+              --generate-notes
+          fi
