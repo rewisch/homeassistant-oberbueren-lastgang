@@ -27,13 +27,25 @@ from .const import BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
 
-# Symfony emits the CSRF token as: <input type="hidden" name="_csrf_token" value="...">
-# The order of attributes is stable enough that a regex is sufficient and avoids
-# pulling in BeautifulSoup just for one field.
-_CSRF_RE = re.compile(
-    r'name="_csrf_token"\s+value="([^"]+)"',
+# Symfony emits the CSRF token as a hidden <input>. The attribute order in
+# rendered HTML is not guaranteed (templates, minifiers, server versions can
+# all reshuffle it), so we first locate the whole <input> element by its
+# name attribute, then pick out the value attribute from inside it. This
+# also tolerates single-quoted attributes.
+_CSRF_INPUT_RE = re.compile(
+    r"""<input\b[^>]*\bname=["']_csrf_token["'][^>]*>""",
     re.IGNORECASE,
 )
+_VALUE_RE = re.compile(r"""value=["']([^"']+)["']""", re.IGNORECASE)
+
+
+def _extract_csrf_token(html: str) -> str | None:
+    """Pull the _csrf_token value out of the rendered login HTML."""
+    input_match = _CSRF_INPUT_RE.search(html)
+    if not input_match:
+        return None
+    value_match = _VALUE_RE.search(input_match.group(0))
+    return value_match.group(1) if value_match else None
 
 
 class OberbuerenError(Exception):
@@ -89,10 +101,22 @@ class OberbuerenClient:
         except aiohttp.ClientError as err:
             raise ApiError(f"Could not reach login page: {err}") from err
 
-        match = _CSRF_RE.search(html)
-        if not match:
+        csrf_token = _extract_csrf_token(html)
+        if csrf_token is None:
+            # Log a focused snippet so we can diagnose without the full
+            # 17 KB page in the error log. We try to land near a likely
+            # location of the field; otherwise just show the start.
+            idx = html.lower().find("_csrf_token")
+            if idx == -1:
+                snippet = html[:600]
+                marker = "no _csrf_token substring; showing first 600 chars"
+            else:
+                snippet = html[max(0, idx - 200) : idx + 400]
+                marker = f"context around _csrf_token (at offset {idx})"
+            _LOGGER.error(
+                "CSRF token regex did not match. %s:\n%s", marker, snippet
+            )
             raise ApiError("CSRF token not found in login form HTML")
-        csrf_token = match.group(1)
 
         # 2. POST credentials. Symfony returns 302; we don't want aiohttp to
         # follow the redirect because we need to inspect the Location header
