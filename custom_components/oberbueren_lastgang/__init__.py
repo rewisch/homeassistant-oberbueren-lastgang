@@ -33,7 +33,7 @@ from .const import (
     SERVICE_BACKFILL,
 )
 from .coordinator import LastgangCoordinator
-from .tariffs import write_example_tariffs
+from .tariffs import install_default_tariffs_if_missing
 
 PLATFORMS: list[str] = ["sensor"]
 
@@ -86,10 +86,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # Drop a commented example tariffs file the first time we set up an
-    # entry, so the user can fill it in without having to read the README.
+    # Seed the user's tariffs file from the integration's bundled default
+    # on first setup. Idempotent: never overwrites once the user has the
+    # file, so HACS upgrades won't blow away their edits or annual
+    # tariff additions.
     await hass.async_add_executor_job(
-        write_example_tariffs, hass.config.config_dir
+        install_default_tariffs_if_missing, hass.config.config_dir
     )
 
     # Bring up the sensor platform (8 aggregate entities per meter).

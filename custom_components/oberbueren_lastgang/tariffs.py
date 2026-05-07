@@ -178,15 +178,45 @@ def load_tariffs(config_dir: Path | str) -> TariffDatabase:
     return TariffDatabase(periods)
 
 
-def write_example_tariffs(config_dir: Path | str) -> Path:
-    """Drop a commented example file at the standard location, if missing."""
-    path = Path(config_dir) / TARIFFS_FILENAME
-    if path.exists():
-        return path
+# Bundled with the integration — copied to the user's HA config dir on
+# first setup if (and only if) they don't already have a file there.
+_BUNDLED_DEFAULT_FILENAME = "default_tariffs.yaml"
 
-    path.write_text(_EXAMPLE_YAML, encoding="utf-8")
-    _LOGGER.info("Wrote example tariff template to %s", path)
-    return path
+
+def install_default_tariffs_if_missing(config_dir: Path | str) -> Path:
+    """Copy the integration's bundled default tariffs to the user's config.
+
+    Idempotent: does nothing if the user's file already exists. Updates
+    of the integration therefore never overwrite user edits — the user
+    fully owns ``<HA-config>/oberbueren_lastgang_tariffs.yaml`` once it
+    has been written for the first time.
+
+    If the integration package somehow ships without the bundled
+    default (shouldn't happen via HACS but is possible during local
+    development), we fall back to the embedded placeholder so the user
+    at least gets *some* file with the right shape.
+    """
+    user_path = Path(config_dir) / TARIFFS_FILENAME
+    if user_path.exists():
+        return user_path
+
+    bundled = Path(__file__).parent / _BUNDLED_DEFAULT_FILENAME
+    if bundled.exists():
+        user_path.write_text(
+            bundled.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        _LOGGER.info(
+            "Installed bundled default tariffs at %s (copied from %s)",
+            user_path, bundled,
+        )
+    else:
+        user_path.write_text(_EXAMPLE_YAML, encoding="utf-8")
+        _LOGGER.warning(
+            "Bundled default tariffs missing at %s — wrote placeholder "
+            "template to %s; please review",
+            bundled, user_path,
+        )
+    return user_path
 
 
 class TariffError(Exception):

@@ -94,11 +94,23 @@ import lands at 06:00.
 
 ## Tariff configuration (cost calculation)
 
-For cost statistics to be non-zero, drop a tariff YAML at
-`<HA-config>/oberbueren_lastgang_tariffs.yaml`. The integration writes
-a placeholder template the first time it sets up an entry — fill in
-the rates from your bill (excluding VAT, the integration applies the
-8.1% multiplier). Example:
+The integration ships with the **current Oberbüren tariff** built in.
+On first setup it copies the bundled defaults to
+`<HA-config>/oberbueren_lastgang_tariffs.yaml` — you don't need to do
+anything for cost statistics to work out of the box.
+
+**Updates never overwrite your file.** Once that path exists, the
+integration leaves it alone forever, even across HACS upgrades. So you
+can edit prices, add tariff periods, or apply per-position MwSt
+overrides without worrying about losing your changes.
+
+When the canonical Oberbüren tariff changes (typically on 1 January),
+the bundled defaults in the repo are bumped — but your local file
+stays as-is. To pick up new defaults, either compare against the
+bundled `default_tariffs.yaml` and merge, or delete your file and
+restart HA to re-seed from the new default.
+
+The file format:
 
 ```yaml
 - valid_from: 2026-01-01
