@@ -419,12 +419,10 @@ class _BasePeriodSensor(CoordinatorEntity[AggregateCoordinator], SensorEntity):
         self._attr_name = f"{kind.capitalize()} {period.de_label}"
         self._attr_device_class = device_class
         self._attr_native_unit_of_measurement = unit
-        # Period-aggregate sensors are point-in-time *summaries* of fixed
-        # time windows that reset on calendar boundaries — not classical
-        # cumulative totals. ``measurement`` keeps HA from trying to
-        # interpret them as long-term-stats counters; the real long-term
+        # No state_class: HA rejects MEASUREMENT for monetary/energy device
+        # classes, and these aren't cumulative totals either — they're
+        # summary values over fixed/rolling windows. The real long-term
         # data lives in our External Statistics.
-        self._attr_state_class = SensorStateClass.MEASUREMENT
 
         # Group all sensors for one meter under a single device card in
         # the UI — looks cleaner than 8 floating entities.
@@ -513,7 +511,6 @@ class DerivedSensor(CoordinatorEntity[AggregateCoordinator], SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
@@ -532,6 +529,10 @@ class DerivedSensor(CoordinatorEntity[AggregateCoordinator], SensorEntity):
         self._attr_native_unit_of_measurement = spec.unit
         if spec.device_class is not None:
             self._attr_device_class = spec.device_class
+        else:
+            # Without a device class, MEASUREMENT is valid and accurate
+            # for the Ø-style sensors (true point-in-time values).
+            self._attr_state_class = SensorStateClass.MEASUREMENT
         if spec.icon is not None:
             self._attr_icon = spec.icon
 
