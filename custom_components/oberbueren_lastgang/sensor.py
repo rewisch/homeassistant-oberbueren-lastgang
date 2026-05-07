@@ -19,7 +19,7 @@ from __future__ import annotations
 import calendar
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -228,7 +228,15 @@ class AggregateCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 )
                 result[f"{prefix}_{period.key}"] = value
 
-        _add_derived(result, now_local)
+        cost_total_id = build_cost_statistic_id(self._objekt_id, COST_TOTAL_KEY)
+        year_projection = await recorder.async_add_executor_job(
+            _compute_seasonal_year_projection,
+            self.hass,
+            cost_total_id,
+            now_local,
+        )
+
+        _add_derived(result, now_local, year_projection)
         return result
 
 
@@ -251,19 +259,121 @@ def _sum_change_for(
     return float(sum(r.get("change") or 0.0 for r in rows))
 
 
-def _add_derived(result: dict[str, float | None], now_local: datetime) -> None:
+def _daily_change_map(
+    hass: HomeAssistant,
+    statistic_id: str,
+    start_date: date,
+    end_date_exclusive: date,
+) -> dict[date, float]:
+    """Sum hourly ``change`` rows into per-local-day buckets.
+
+    A day is present in the output iff the recorder has at least one
+    hourly row for it — that's how we distinguish "imported, zero
+    consumption" from "no data". Returns an empty dict when nothing has
+    been imported in the range.
+    """
+    if start_date >= end_date_exclusive:
+        return {}
+    start_local = datetime.combine(
+        start_date, datetime.min.time()
+    ).replace(tzinfo=_LOCAL_TZ)
+    end_local = datetime.combine(
+        end_date_exclusive, datetime.min.time()
+    ).replace(tzinfo=_LOCAL_TZ)
+    rows = statistics_during_period(
+        hass,
+        start_local.astimezone(dt_util.UTC),
+        end_local.astimezone(dt_util.UTC),
+        {statistic_id},
+        "hour",
+        None,
+        {"change"},
+    ).get(statistic_id, [])
+
+    out: dict[date, float] = {}
+    for r in rows:
+        start = r.get("start")
+        if start is None:
+            continue
+        if not isinstance(start, datetime):
+            start = datetime.fromtimestamp(float(start), tz=dt_util.UTC)
+        d = start.astimezone(_LOCAL_TZ).date()
+        out[d] = out.get(d, 0.0) + float(r.get("change") or 0.0)
+    return out
+
+
+def _compute_seasonal_year_projection(
+    hass: HomeAssistant,
+    statistic_id: str,
+    now_local: datetime,
+) -> float | None:
+    """Project full-year cost using actual + last-year + running average.
+
+    For each day of the current calendar year we pick a value via this
+    fallback chain:
+
+      1. day ≤ yesterday and we have stats rows for it → real value
+      2. matching day last year is imported                → last-year value
+      3. otherwise                                         → running daily
+         average of all current-year days that *do* have data
+
+    Returns ``None`` if no current-year data has been imported yet —
+    nothing meaningful to project from.
+    """
+    today = now_local.date()
+    yesterday = today - timedelta(days=1)
+    year_start = date(now_local.year, 1, 1)
+    year_end_excl = date(now_local.year + 1, 1, 1)
+
+    this_year = _daily_change_map(
+        hass, statistic_id, year_start, yesterday + timedelta(days=1)
+    )
+    if not this_year:
+        return None
+
+    last_year = _daily_change_map(
+        hass,
+        statistic_id,
+        date(now_local.year - 1, 1, 1),
+        year_start,
+    )
+
+    daily_avg = sum(this_year.values()) / len(this_year)
+
+    total = 0.0
+    d = year_start
+    one_day = timedelta(days=1)
+    while d < year_end_excl:
+        if d <= yesterday and d in this_year:
+            total += this_year[d]
+        else:
+            try:
+                ly = d.replace(year=d.year - 1)
+            except ValueError:
+                # Feb 29 in a leap current year with non-leap last year
+                ly = None
+            if ly is not None and ly in last_year:
+                total += last_year[ly]
+            else:
+                total += daily_avg
+        d += one_day
+    return total
+
+
+def _add_derived(
+    result: dict[str, float | None],
+    now_local: datetime,
+    year_projection: float | None,
+) -> None:
     """Compute projection / average sensors from the period values.
 
-    Anchored on the pure assumption that the upstream feed provides
-    full-day data through *yesterday* — so the number of complete days
-    of consumption for the current month is ``today.day - 1``, and for
-    the current year ``timetuple().tm_yday - 1``. Both ``None`` if the
-    period has only just started (no completed day yet).
+    Monthly projection is a simple linear extrapolation — within a
+    single month, seasonality is small enough that this is fine. The
+    yearly projection is computed separately by
+    ``_compute_seasonal_year_projection`` and passed in here.
     """
     days_in_month = calendar.monthrange(now_local.year, now_local.month)[1]
-    days_in_year = 366 if calendar.isleap(now_local.year) else 365
     days_done_month = now_local.day - 1
-    days_done_year = now_local.timetuple().tm_yday - 1
 
     cm_kwh = result.get("kwh_current_month") or 0.0
     cm_cost = result.get("cost_total_current_month") or 0.0
@@ -277,11 +387,7 @@ def _add_derived(result: dict[str, float | None], now_local: datetime) -> None:
         result["projected_month_cost"] = None
         result["avg_daily_kwh_current_month"] = None
 
-    if days_done_year > 0:
-        cy_cost = result.get("cost_total_current_year") or 0.0
-        result["projected_year_cost"] = cy_cost / days_done_year * days_in_year
-    else:
-        result["projected_year_cost"] = None
+    result["projected_year_cost"] = year_projection
 
     # Effective average price = total CHF / total kWh × 100 (Rp/kWh).
     # Falls apart if there's no kWh consumption (division by zero) or

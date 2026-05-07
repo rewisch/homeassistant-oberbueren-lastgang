@@ -114,7 +114,7 @@ Zusätzlich zu den Langzeitstatistiken werden pro Zähler 18 Sensor-Entitäten e
 | Sensor                   | Einheit | Beschreibung                        |
 | ------------------------ | ------- | ----------------------------------- |
 | Prognose Monat           | CHF     | Linear bis Monatsende hochgerechnet |
-| Prognose Jahr            | CHF     | Linear bis Jahresende hochgerechnet |
+| Prognose Jahr            | CHF     | Pro Tag: echter Wert → Vorjahr (falls importiert) → laufender Tagesschnitt |
 | Ø Tagesverbrauch (Monat) | kWh     | Verbrauch ÷ Tage seit Monatsanfang  |
 | Ø Preis (Monat)          | Rp/kWh  | Effektiver Preis inkl. MwSt         |
 
