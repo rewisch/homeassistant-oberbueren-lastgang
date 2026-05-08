@@ -14,8 +14,12 @@ CONF_OBJEKT_ID: Final = "objekt_id"
 CONF_METERINGCODE: Final = "meteringcode"
 CONF_NAME: Final = "name"
 
-# Daily poll: previous day at this local hour (must be > 0 because data is for yesterday).
-DEFAULT_POLL_HOUR: Final = 6
+# Daily poll: previous day at these local hours (must all be > 0 because data is
+# for yesterday). We fire at multiple hours because the upstream API occasionally
+# returns 5xx or simply doesn't have yesterday's data ready that early. Since
+# ``async_catch_up`` is idempotent (no-op once up to date), the later slots act
+# as automatic retries — no extra bookkeeping needed.
+DEFAULT_POLL_HOURS: Final = (6, 7, 8, 9)
 
 # Service names
 SERVICE_BACKFILL: Final = "backfill"

@@ -30,7 +30,7 @@ from .const import (
     ATTR_START_DATE,
     CONF_EMAIL,
     CONF_PASSWORD,
-    DEFAULT_POLL_HOUR,
+    DEFAULT_POLL_HOURS,
     DOMAIN,
     SERVICE_BACKFILL,
 )
@@ -91,7 +91,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning("Daily import failed (will retry tomorrow): %s", err)
 
     unsub_daily = async_track_time_change(
-        hass, _daily_trigger, hour=DEFAULT_POLL_HOUR, minute=0, second=0
+        hass, _daily_trigger, hour=list(DEFAULT_POLL_HOURS), minute=0, second=0
     )
     entry.async_on_unload(unsub_daily)
 
