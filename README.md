@@ -10,7 +10,7 @@ Eine benutzerdefinierte Integration, die 15-Minuten-Stromlastgangdaten von
   zu stündlichen kWh zusammengefasst und als External Statistics gespeichert, sodass sie die Recorder-Bereinigung überstehen und im **Energie-Dashboard** erscheinen (kWh + CHF).
 * **Kostenberechnung** — jede importierte Stunde wird anhand einer vom Benutzer bearbeitbaren Schweizer Tarifdatei berechnet (HT/NT, Netznutzung, Energiebezug, Abgaben, Messtarif), inklusive Aufschlüsselung nach Kategorien und `cost_total` für das Preisfeld des Energie-Dashboards.
 * **18 Dashboard-Sensoren pro Zähler** — Verbrauch & Kosten für Aktueller Monat / Letzter Monat / Aktuelles Jahr / Letztes Jahr / Gestern / Letzte 7 Tage / Letzte 30 Tage sowie Monatsprognose, Jahresprognose, Ø Tagesverbrauch, Ø Preis.
-* **Automatisches Nachholen fehlender Daten** — wenn HA beim täglichen Abruf um 06:00 Uhr offline war (oder mehrere Tage), werden fehlende Tage automatisch beim nächsten Start oder beim nächsten 06:00-Trigger importiert.
+* **Automatisches Nachholen fehlender Daten** — wenn HA beim täglichen Abruf offline war (oder mehrere Tage), werden fehlende Tage automatisch beim nächsten Start oder beim nächsten Poll-Trigger importiert.
 * **Sichere erneute Ausführung** — erneutes Ausführen von `backfill` über bereits in HA vorhandene Daten erkennt Überschneidungen, führt die Daten zusammen und erstellt die kumulative Summenkette sauber neu — kein „Fix issues in Statistics“-Workaround mehr nötig.
 
 ## Installation
@@ -24,7 +24,7 @@ Eine benutzerdefinierte Integration, die 15-Minuten-Stromlastgangdaten von
    **Herunterladen**.
 4. Home Assistant neu starten.
 5. **Einstellungen → Geräte & Dienste → Integration hinzufügen → „Strom Oberbüren Lastgang“**.
-6. E-Mail + Passwort eingeben, dann `objektId` und `meteringcode` deines Zählers angeben
+6. URL (Default `https://www.strom.oberbueren.ch`), E-Mail und Passwort eingeben, dann `objektId` und `meteringcode` deines Zählers angeben
    (beides findest du in der URL der Lastgangdaten-Seite im Browser).
 
 ### Manuelle Installation
@@ -36,15 +36,22 @@ Eine benutzerdefinierte Integration, die 15-Minuten-Stromlastgangdaten von
 
 ## Täglicher Auto-Import
 
-Nach der Einrichtung importiert die Integration jeden Morgen um
-**06:00 Uhr Ortszeit** automatisch die Daten des Vortags.
-Keine weitere Aktion erforderlich.
+Nach der Einrichtung importiert die Integration die Daten des Vortags automatisch — standardmäßig zu je einem Versuch um **06, 07, 08 und 09 Uhr Ortszeit**. Sobald ein Versuch erfolgreich war, sind die folgenden No-Ops; der Mehrfach-Slot dient als Retry, falls der Server beim ersten Anlauf noch keine Daten hat oder einen 5xx-Fehler liefert.
 
-Falls dein HA-Host um 06:00 Uhr offline war (oder mehrere Tage), erkennt ein Catch-up beim Start bei jedem Bootvorgang die Lücke und lädt die fehlenden Tage automatisch nach — begrenzt auf 30 Tage. Längere Ausfälle benötigen einen manuellen `backfill`-Aufruf.
+Falls dein HA-Host während aller Slots offline war (oder mehrere Tage), erkennt ein Catch-up beim Start die Lücke und lädt die fehlenden Tage automatisch nach — begrenzt auf 30 Tage. Längere Ausfälle benötigen einen manuellen `backfill`-Aufruf.
 
 Ein erneutes Ausführen von `backfill` über einen Zeitraum, der bereits in HA vorhanden ist, ist **sicher**:
 Die Integration erkennt die Überschneidung, führt die neuen Daten mit den bereits gespeicherten zusammen und erstellt die kumulative Summenkette vollständig neu.
 Kein manueller „Fix issues in Statistics“-Workaround mehr nötig.
+
+## Einstellungen nachträglich ändern
+
+Auf der Integrations-Kachel (**Einstellungen → Geräte & Dienste → Strom Oberbüren Lastgang**) gibt es zwei Buttons:
+
+* **Konfigurieren** — Poll-Stunden auswählen (Multi-Select 01–23, Default `6, 7, 8, 9`).
+* **Neu konfigurieren** — URL, E-Mail, Passwort, Anzeigename und Zähler-IDs ändern. Die Zugangsdaten werden beim Speichern erneut gegen die angegebene URL geprüft.
+
+Nach dem Speichern wird die Integration automatisch neu geladen — kein HA-Neustart nötig.
 
 ## Initiales Backfill
 
@@ -120,7 +127,7 @@ Zusätzlich zu den Langzeitstatistiken werden pro Zähler 18 Sensor-Entitäten e
 
 Die Kosten-Periodensensoren stellen eine Aufschlüsselung nach Kategorien über die Entity-Attribute bereit — öffne die Entität unter **Entwicklerwerkzeuge → Zustände**, um zu sehen, „woher der Betrag kommt“.
 
-Die Aktualisierung erfolgt stündlich, sodass die Werte innerhalb einer Stunde nach dem täglichen Import um 06:00 Uhr aktuell sind.
+Die Aktualisierung erfolgt stündlich, sodass die Werte innerhalb einer Stunde nach dem täglichen Import aktuell sind.
 
 ## Tarifkonfiguration (Kostenberechnung)
 
