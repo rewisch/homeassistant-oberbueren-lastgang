@@ -3,8 +3,9 @@
     "step": {
       "user": {
         "title": "Strom Oberbüren — Sign in",
-        "description": "Enter your strom.oberbueren.ch credentials.",
+        "description": "Enter the URL and your credentials. The default is strom.oberbueren.ch — only change the URL if your utility runs the same software on a different domain.",
         "data": {
+          "base_url": "URL",
           "email": "Email",
           "password": "Password"
         }
@@ -17,6 +18,18 @@
           "objekt_id": "Object ID",
           "meteringcode": "Metering Code"
         }
+      },
+      "reconfigure": {
+        "title": "Edit settings",
+        "description": "You can change the URL, credentials, meter IDs and display name. The credentials will be re-validated against the URL when you save.",
+        "data": {
+          "base_url": "URL",
+          "email": "Email",
+          "password": "Password",
+          "name": "Display name",
+          "objekt_id": "Object ID",
+          "meteringcode": "Metering Code"
+        }
       }
     },
     "error": {
@@ -24,7 +37,19 @@
       "cannot_connect": "Could not connect to the site."
     },
     "abort": {
-      "already_configured": "This meter has already been configured."
+      "already_configured": "This meter has already been configured.",
+      "reconfigure_successful": "Settings updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Poll times",
+        "description": "Pick one or more times of day at which yesterday's data is fetched. Multiple slots act as automatic retries in case the server hasn't published the data yet or returns an error on the first attempt.",
+        "data": {
+          "poll_hours": "Poll times"
+        }
+      }
     }
   },
   "services": {

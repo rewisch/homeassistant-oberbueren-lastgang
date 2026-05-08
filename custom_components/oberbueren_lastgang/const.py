@@ -13,6 +13,8 @@ CONF_PASSWORD: Final = "password"
 CONF_OBJEKT_ID: Final = "objekt_id"
 CONF_METERINGCODE: Final = "meteringcode"
 CONF_NAME: Final = "name"
+CONF_BASE_URL: Final = "base_url"
+CONF_POLL_HOURS: Final = "poll_hours"
 
 # Daily poll: previous day at these local hours (must all be > 0 because data is
 # for yesterday). We fire at multiple hours because the upstream API occasionally

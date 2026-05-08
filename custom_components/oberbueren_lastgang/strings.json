@@ -3,8 +3,9 @@
     "step": {
       "user": {
         "title": "Strom Oberbüren — Anmeldung",
-        "description": "Gib deine Zugangsdaten von strom.oberbueren.ch ein.",
+        "description": "Gib die URL und deine Zugangsdaten ein. Default ist strom.oberbueren.ch — passe die URL nur an, wenn dein Versorger die gleiche Software auf einer anderen Domain betreibt.",
         "data": {
+          "base_url": "URL",
           "email": "E-Mail",
           "password": "Passwort"
         }
@@ -17,6 +18,18 @@
           "objekt_id": "Objekt-ID",
           "meteringcode": "Metering Code"
         }
+      },
+      "reconfigure": {
+        "title": "Einstellungen ändern",
+        "description": "Du kannst URL, Zugangsdaten, Zähler-IDs und den Anzeigenamen anpassen. Beim Speichern werden die Zugangsdaten gegen die angegebene URL geprüft.",
+        "data": {
+          "base_url": "URL",
+          "email": "E-Mail",
+          "password": "Passwort",
+          "name": "Anzeigename",
+          "objekt_id": "Objekt-ID",
+          "meteringcode": "Metering Code"
+        }
       }
     },
     "error": {
@@ -24,7 +37,19 @@
       "cannot_connect": "Verbindung zur Webseite fehlgeschlagen."
     },
     "abort": {
-      "already_configured": "Dieser Zähler wurde bereits hinzugefügt."
+      "already_configured": "Dieser Zähler wurde bereits hinzugefügt.",
+      "reconfigure_successful": "Einstellungen aktualisiert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Poll-Zeiten",
+        "description": "Wähle eine oder mehrere Tageszeiten, zu denen die Daten von gestern abgerufen werden. Mehrere Slots wirken als automatische Wiederholungen, falls der Server beim ersten Versuch noch keine Daten hat oder einen Fehler liefert.",
+        "data": {
+          "poll_hours": "Poll-Zeiten"
+        }
+      }
     }
   },
   "services": {

@@ -28,8 +28,11 @@ from .const import (
     ACTIVE_MESSLINIEN,
     ATTR_END_DATE,
     ATTR_START_DATE,
+    BASE_URL,
+    CONF_BASE_URL,
     CONF_EMAIL,
     CONF_PASSWORD,
+    CONF_POLL_HOURS,
     DEFAULT_POLL_HOURS,
     DOMAIN,
     SERVICE_BACKFILL,
@@ -60,11 +63,20 @@ _RECOMPUTE_COSTS_SCHEMA = vol.Schema(
 )
 
 
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry so the daily-trigger registration picks up new hours."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = OberbuerenClient(
         hass=hass,
         email=entry.data[CONF_EMAIL],
         password=entry.data[CONF_PASSWORD],
+        # Pre-existing entries (set up before the URL became configurable)
+        # don't have CONF_BASE_URL stored — fall back to the bundled default
+        # so they keep working without forcing a reconfigure.
+        base_url=entry.data.get(CONF_BASE_URL, BASE_URL),
     )
 
     # Verify credentials still work at startup. Wrong password → reauth flow;
@@ -90,10 +102,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except ApiError as err:
             _LOGGER.warning("Daily import failed (will retry tomorrow): %s", err)
 
+    # Poll hours are user-configurable via the options flow; fall back to
+    # the bundled default if nothing has been set yet. Empty/invalid values
+    # also fall back so a stale options dict can't disable polling entirely.
+    raw_hours = entry.options.get(CONF_POLL_HOURS) or list(DEFAULT_POLL_HOURS)
+    poll_hours = sorted({int(h) for h in raw_hours})
+
     unsub_daily = async_track_time_change(
-        hass, _daily_trigger, hour=list(DEFAULT_POLL_HOURS), minute=0, second=0
+        hass, _daily_trigger, hour=poll_hours, minute=0, second=0
     )
     entry.async_on_unload(unsub_daily)
+
+    # Reload the entry whenever the user saves new options so the time
+    # trigger picks up the new hours immediately (instead of next HA boot).
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     # Startup catch-up: if HA was offline at 06:00, the daily trigger
     # didn't fire — so on every boot we also run catch-up to cover any
