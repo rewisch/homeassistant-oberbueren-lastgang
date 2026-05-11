@@ -36,7 +36,7 @@ Eine benutzerdefinierte Integration, die 15-Minuten-Stromlastgangdaten von
 
 ## Täglicher Auto-Import
 
-Nach der Einrichtung importiert die Integration die Daten des Vortags automatisch — standardmäßig zu je einem Versuch um **06, 07, 08 und 09 Uhr Ortszeit**. Sobald ein Versuch erfolgreich war, sind die folgenden No-Ops; der Mehrfach-Slot dient als Retry, falls der Server beim ersten Anlauf noch keine Daten hat oder einen 5xx-Fehler liefert.
+Nach der Einrichtung importiert die Integration die Daten des Vortags automatisch — standardmäßig zu je einem Versuch um **06, 07, 08 und 09 Uhr Ortszeit**. Jeder Slot prüft die letzten drei Tage rollend auf Vollständigkeit und ergänzt fehlende Stunden, falls der Upstream sie inzwischen veröffentlicht hat; ein bereits vollständiger Tag wird übersprungen, gespeicherte Daten werden bei einem Upstream-Fehler oder leeren Response nie überschrieben.
 
 Falls dein HA-Host während aller Slots offline war (oder mehrere Tage), erkennt ein Catch-up beim Start die Lücke und lädt die fehlenden Tage automatisch nach — begrenzt auf 30 Tage. Längere Ausfälle benötigen einen manuellen `backfill`-Aufruf.
 

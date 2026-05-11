@@ -24,7 +24,7 @@ the previous-hour anchor — so contiguous imports are recommended.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Iterable
 
 from homeassistant.components.recorder import get_instance
@@ -170,6 +170,48 @@ async def async_get_last_imported_hour(
     if start is None:
         return None
     return datetime.fromtimestamp(float(start), tz=timezone.utc)
+
+
+async def async_count_stored_hours_per_day(
+    hass: HomeAssistant,
+    statistic_id: str,
+    start: date,
+    end: date,
+    local_tz: tzinfo,
+) -> dict[date, int]:
+    """Return ``{local_date: hourly_point_count}`` over ``[start, end]``.
+
+    Used by the daily catch-up to decide whether a freshly fetched day
+    actually has *more* coverage than what's already stored before
+    triggering a (potentially expensive) re-import. A day not present
+    in the result has zero stored points.
+    """
+    range_start_local = datetime.combine(
+        start, datetime.min.time(), tzinfo=local_tz
+    )
+    range_end_local = datetime.combine(
+        end + timedelta(days=1), datetime.min.time(), tzinfo=local_tz
+    )
+    # One-hour padding either side absorbs DST edge cases when bucketing
+    # back from UTC into the local date.
+    range_start_utc = range_start_local.astimezone(timezone.utc) - timedelta(hours=1)
+    range_end_utc = range_end_local.astimezone(timezone.utc) + timedelta(hours=1)
+
+    recorder = get_instance(hass)
+    rows = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass, range_start_utc, range_end_utc,
+        {statistic_id}, "hour", None, {"change"},
+    )
+    counts: dict[date, int] = {}
+    for row in rows.get(statistic_id, []):
+        ts = row.get("start")
+        if not isinstance(ts, datetime):
+            ts = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        local_date = ts.astimezone(local_tz).date()
+        if start <= local_date <= end:
+            counts[local_date] = counts.get(local_date, 0) + 1
+    return counts
 
 
 async def _async_read_existing_hourly_kwh(
