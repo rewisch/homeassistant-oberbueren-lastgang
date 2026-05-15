@@ -47,7 +47,8 @@
         "title": "Poll times",
         "description": "Pick one or more times of day at which yesterday's data is fetched. Multiple slots act as automatic retries in case the server hasn't published the data yet or returns an error on the first attempt.",
         "data": {
-          "poll_hours": "Poll times"
+          "poll_hours": "Poll times",
+          "debug_logging": "Verbose debug logging"
         }
       }
     }
@@ -68,6 +69,16 @@
         "end_date": {
           "name": "End date",
           "description": "Last day (inclusive). Defaults to start date."
+        }
+      }
+    },
+    "catch_up": {
+      "name": "Catch up now",
+      "description": "Runs the same catch-up import as the automatic startup and daily triggers. Refreshes the rolling recent-day window and fills detected gaps up to yesterday.",
+      "fields": {
+        "entry_id": {
+          "name": "Config entry",
+          "description": "Which configured account to catch up."
         }
       }
     },

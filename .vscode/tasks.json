@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "HA dev: start",
+      "type": "shell",
+      "command": "docker compose up -d",
+      "problemMatcher": []
+    },
+    {
+      "label": "HA dev: logs",
+      "type": "shell",
+      "command": "docker compose logs -f homeassistant",
+      "problemMatcher": []
+    },
+    {
+      "label": "HA dev: stop",
+      "type": "shell",
+      "command": "docker compose down",
+      "problemMatcher": []
+    },
+    {
+      "label": "Compile integration",
+      "type": "shell",
+      "command": "python3 -m compileall custom_components/oberbueren_lastgang",
+      "problemMatcher": []
+    }
+  ]
+}

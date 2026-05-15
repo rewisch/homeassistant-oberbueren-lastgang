@@ -30,12 +30,14 @@ from .const import (
     ATTR_START_DATE,
     BASE_URL,
     CONF_BASE_URL,
+    CONF_DEBUG_LOGGING,
     CONF_EMAIL,
     CONF_PASSWORD,
     CONF_POLL_HOURS,
     DEFAULT_POLL_HOURS,
     DOMAIN,
     SERVICE_BACKFILL,
+    SERVICE_CATCH_UP,
 )
 from .coordinator import LastgangCoordinator
 from .statistics import async_recompute_costs
@@ -62,6 +64,12 @@ _RECOMPUTE_COSTS_SCHEMA = vol.Schema(
     }
 )
 
+_CATCH_UP_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+    }
+)
+
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry so the daily-trigger registration picks up new hours."""
@@ -77,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # don't have CONF_BASE_URL stored — fall back to the bundled default
         # so they keep working without forcing a reconfigure.
         base_url=entry.data.get(CONF_BASE_URL, BASE_URL),
+        debug_logging=bool(entry.options.get(CONF_DEBUG_LOGGING, False)),
     )
 
     # Verify credentials still work at startup. Wrong password → reauth flow;
@@ -178,6 +187,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=_BACKFILL_SCHEMA,
         )
 
+    # Manual trigger for the exact same catch-up path used by the scheduled
+    # daily import and the delayed startup import. Useful for diagnostics and
+    # for retrying a transient upstream 5xx without changing poll hours.
+    if not hass.services.has_service(DOMAIN, SERVICE_CATCH_UP):
+        async def _async_handle_catch_up(call: ServiceCall) -> None:
+            entry_id: str = call.data["entry_id"]
+            target: LastgangCoordinator | None = hass.data.get(DOMAIN, {}).get(
+                entry_id
+            )
+            if target is None:
+                raise ValueError(f"Unknown config entry: {entry_id}")
+
+            count = await target.async_catch_up()
+            _LOGGER.info(
+                "Manual catch-up complete: %d hourly point(s) written for %s",
+                count, target.friendly_name,
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CATCH_UP,
+            _async_handle_catch_up,
+            schema=_CATCH_UP_SCHEMA,
+        )
+
     # Register the cost-recompute service. Same one-time-per-domain
     # pattern as backfill.
     if not hass.services.has_service(DOMAIN, SERVICE_RECOMPUTE_COSTS):
@@ -240,7 +274,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Remove the service when no entries remain so it doesn't linger after
     # the integration is fully removed.
     if not domain_data:
-        for svc in (SERVICE_BACKFILL, SERVICE_RECOMPUTE_COSTS):
+        for svc in (SERVICE_BACKFILL, SERVICE_CATCH_UP, SERVICE_RECOMPUTE_COSTS):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)
 

@@ -47,7 +47,8 @@
         "title": "Poll-Zeiten",
         "description": "Wähle eine oder mehrere Tageszeiten, zu denen die Daten von gestern abgerufen werden. Mehrere Slots wirken als automatische Wiederholungen, falls der Server beim ersten Versuch noch keine Daten hat oder einen Fehler liefert.",
         "data": {
-          "poll_hours": "Poll-Zeiten"
+          "poll_hours": "Poll-Zeiten",
+          "debug_logging": "Ausführliches Debug-Logging"
         }
       }
     }
@@ -68,6 +69,16 @@
         "end_date": {
           "name": "Enddatum",
           "description": "Letzter Tag (inklusiv). Default: gleiches Datum wie Start."
+        }
+      }
+    },
+    "catch_up": {
+      "name": "Catch-up jetzt ausführen",
+      "description": "Führt denselben Catch-up-Import aus wie der automatische Startup- und Tages-Trigger. Aktualisiert das rollende Fenster der letzten Tage und füllt erkannte Lücken bis gestern.",
+      "fields": {
+        "entry_id": {
+          "name": "Config Entry",
+          "description": "Welche konfigurierte Anmeldung soll aktualisiert werden."
         }
       }
     },

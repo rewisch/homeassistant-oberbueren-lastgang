@@ -15,6 +15,7 @@ CONF_METERINGCODE: Final = "meteringcode"
 CONF_NAME: Final = "name"
 CONF_BASE_URL: Final = "base_url"
 CONF_POLL_HOURS: Final = "poll_hours"
+CONF_DEBUG_LOGGING: Final = "debug_logging"
 
 # Daily poll: previous day at these local hours (must all be > 0 because data is
 # for yesterday). We fire at multiple hours because the upstream API occasionally
@@ -25,6 +26,7 @@ DEFAULT_POLL_HOURS: Final = (6, 7, 8, 9)
 
 # Service names
 SERVICE_BACKFILL: Final = "backfill"
+SERVICE_CATCH_UP: Final = "catch_up"
 ATTR_START_DATE: Final = "start_date"
 ATTR_END_DATE: Final = "end_date"
 

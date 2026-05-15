@@ -95,6 +95,7 @@ class OberbuerenClient:
         email: str,
         password: str,
         base_url: str = BASE_URL,
+        debug_logging: bool = False,
     ) -> None:
         # async_create_clientsession spins up a session backed by HA's
         # connector pool but with its own CookieJar. ``auto_cleanup=True``
@@ -104,6 +105,7 @@ class OberbuerenClient:
         self._email = email
         self._password = password
         self._base_url = base_url.rstrip("/")
+        self._debug_logging = debug_logging
         self._logged_in = False
 
     async def async_login(self) -> None:
@@ -111,12 +113,25 @@ class OberbuerenClient:
         # 1. GET the login form to obtain PHPSESSID + CSRF token.
         try:
             async with self._session.get(f"{self._base_url}/login") as resp:
+                if self._debug_logging:
+                    _LOGGER.info(
+                        "Diagnostic login GET: status=%s content_type=%r url=%s",
+                        resp.status,
+                        resp.headers.get("Content-Type", ""),
+                        resp.url,
+                    )
                 resp.raise_for_status()
                 html = await resp.text()
         except aiohttp.ClientError as err:
             raise ApiError(f"Could not reach login page: {err}") from err
 
         csrf_token = _extract_csrf_token(html)
+        if self._debug_logging:
+            _LOGGER.info(
+                "Diagnostic login form: csrf_token_found=%s html_chars=%d",
+                csrf_token is not None,
+                len(html),
+            )
         if csrf_token is None:
             # Log a focused snippet so we can diagnose without the full
             # 17 KB page in the error log. We try to land near a likely
@@ -147,6 +162,12 @@ class OberbuerenClient:
                 data=form,
                 allow_redirects=False,
             ) as resp:
+                if self._debug_logging:
+                    _LOGGER.info(
+                        "Diagnostic login POST: status=%s location=%r",
+                        resp.status,
+                        resp.headers.get("Location", ""),
+                    )
                 if resp.status != 302:
                     raise AuthError(
                         f"Unexpected login response status {resp.status}"
@@ -205,13 +226,35 @@ class OberbuerenClient:
             "type": "detailpage",
             "vorjahr": "false",
         }
-        headers = {"Accept": "application/json, text/plain, */*"}
+        # Mirror the browser's AJAX request context. The endpoint is a
+        # frontend controller and can behave differently when it is not called
+        # as an XMLHttpRequest from the detail page.
+        headers = {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": (
+                f"{self._base_url}/lastgangdaten/detail"
+                f"?objektId={objekt_id}&meteringcode={meteringcode}"
+            ),
+            "X-Requested-With": "XMLHttpRequest",
+        }
 
         url = f"{self._base_url}/lastgangdaten/getMessdaten"
+        if self._debug_logging:
+            _LOGGER.info(
+                "Diagnostic fetch Messdaten: url=%s params=%r headers=%r",
+                url, params, headers,
+            )
         try:
             async with self._session.get(
                 url, params=params, headers=headers, allow_redirects=False
             ) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                if self._debug_logging:
+                    _LOGGER.info(
+                        "Diagnostic Messdaten response: status=%s "
+                        "content_type=%r url=%s",
+                        resp.status, content_type, resp.url,
+                    )
                 # If the session is gone, the app redirects HTML→/login.
                 if resp.status in (301, 302, 303):
                     raise AuthError(
@@ -219,10 +262,16 @@ class OberbuerenClient:
                     )
                 if resp.status in (401, 403):
                     raise AuthError(f"HTTP {resp.status} on data endpoint")
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    if self._debug_logging:
+                        body = await resp.text()
+                        _LOGGER.info(
+                            "Diagnostic Messdaten error body (%d chars): %s",
+                            len(body), body[:1200],
+                        )
+                    resp.raise_for_status()
 
                 # Some installations may serve text/html; check explicitly.
-                content_type = resp.headers.get("Content-Type", "")
                 if "json" not in content_type:
                     raise AuthError(
                         f"Expected JSON, got {content_type!r} — likely auth redirect"
@@ -232,7 +281,17 @@ class OberbuerenClient:
         except aiohttp.ClientError as err:
             raise ApiError(f"Fetch failed: {err}") from err
 
-        return _parse_response(data)
+        response = _parse_response(data)
+        if self._debug_logging:
+            _LOGGER.info(
+                "Diagnostic parsed Messdaten: object=%r unit=%r "
+                "intervals=%d values=%d",
+                response.objekt_description,
+                response.unit,
+                len(response.intervals),
+                len(response.values),
+            )
+        return response
 
     @property
     def logged_in(self) -> bool:

@@ -31,6 +31,22 @@ backfill:
       selector:
         date:
 
+catch_up:
+  name: Catch up now
+  description: >-
+    Run the same catch-up import that normally runs at startup and at the
+    configured poll hours. This refreshes the rolling recent-day window and
+    fills any detected gap up to yesterday.
+  fields:
+    entry_id:
+      name: Config entry
+      description: Which configured account to catch up.
+      required: true
+      example: "01HX9Z7E8K2QY7CDXR..."
+      selector:
+        config_entry:
+          integration: oberbueren_lastgang
+
 recompute_costs:
   name: Recompute costs
   description: >-

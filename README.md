@@ -49,6 +49,7 @@ Kein manueller „Fix issues in Statistics“-Workaround mehr nötig.
 Auf der Integrations-Kachel (**Einstellungen → Geräte & Dienste → Strom Oberbüren Lastgang**) gibt es zwei Buttons:
 
 * **Konfigurieren** — Poll-Stunden auswählen (Multi-Select 01–23, Default `6, 7, 8, 9`).
+* **Ausführliches Debug-Logging** — schreibt Request-Parameter, HTTP-Status, Fehlerbody-Ausschnitte und Antwortgrössen ins Log. Passwort wird nicht geloggt.
 * **Neu konfigurieren** — URL, E-Mail, Passwort, Anzeigename und Zähler-IDs ändern. Die Zugangsdaten werden beim Speichern erneut gegen die angegebene URL geprüft.
 
 Nach dem Speichern wird die Integration automatisch neu geladen — kein HA-Neustart nötig.
@@ -66,6 +67,18 @@ data:
 ```
 
 Tipp: Führe das Backfill in chronologischen Blöcken aus (z. B. jeweils ein Jahr), damit sich die kumulativen kWh-Summen korrekt aufbauen. Die Integration sendet eine HTTP-Anfrage pro Tag, daher benötigt ein ganzes Jahr etwa 365 Anfragen. Sei höflich und überlaste die API nicht.
+
+## Catch-up manuell auslösen
+
+Zum Testen oder zum manuellen Wiederholen nach einem temporären API-Fehler kannst du denselben Catch-up auslösen, der sonst beim HA-Start und zu den konfigurierten Poll-Zeiten läuft:
+
+```yaml
+service: oberbueren_lastgang.catch_up
+data:
+  entry_id: 01HX9Z7E8K2QY7CDXR...
+```
+
+Dieser Dienst aktualisiert das rollende Fenster der letzten Tage und füllt erkannte Lücken bis gestern. Er ist deshalb näher am automatischen Betrieb als ein frei gewähltes Backfill-Datum.
 
 ## Kosten neu berechnen ohne erneuten Download
 

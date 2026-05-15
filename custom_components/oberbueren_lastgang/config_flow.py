@@ -17,8 +17,8 @@ integration:
   setup — URL, credentials, meter IDs, display name — in a single form.
   Used when something about the connection identity changes.
 * The **options** flow (``OberbuerenOptionsFlow``) covers behavioural
-  knobs that aren't part of the connection identity, currently just the
-  daily poll hours.
+  knobs that aren't part of the connection identity, such as daily poll
+  hours and verbose diagnostic logging.
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -43,6 +44,7 @@ from .api import ApiError, AuthError, OberbuerenClient
 from .const import (
     BASE_URL,
     CONF_BASE_URL,
+    CONF_DEBUG_LOGGING,
     CONF_EMAIL,
     CONF_METERINGCODE,
     CONF_NAME,
@@ -256,12 +258,19 @@ class OberbuerenOptionsFlow(OptionsFlow):
             # de-duplicated list of ints so downstream code never has to.
             hours = sorted({int(h) for h in user_input[CONF_POLL_HOURS]})
             return self.async_create_entry(
-                title="", data={CONF_POLL_HOURS: hours}
+                title="",
+                data={
+                    CONF_POLL_HOURS: hours,
+                    CONF_DEBUG_LOGGING: bool(
+                        user_input.get(CONF_DEBUG_LOGGING, False)
+                    ),
+                },
             )
 
         current = self.config_entry.options.get(
             CONF_POLL_HOURS, list(DEFAULT_POLL_HOURS)
         )
+        debug_logging = self.config_entry.options.get(CONF_DEBUG_LOGGING, False)
         # Hour 0 is excluded: at 00:00 local "yesterday" just rolled over and
         # upstream definitely doesn't have its data ready yet.
         hour_options = [
@@ -279,6 +288,10 @@ class OberbuerenOptionsFlow(OptionsFlow):
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Optional(
+                    CONF_DEBUG_LOGGING,
+                    default=debug_logging,
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

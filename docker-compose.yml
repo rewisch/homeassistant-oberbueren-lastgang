@@ -1,0 +1,12 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: oberbueren-lastgang-ha-dev
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    environment:
+      TZ: Europe/Zurich
+    volumes:
+      - ./dev/ha-config:/config
+      - ./custom_components/oberbueren_lastgang:/config/custom_components/oberbueren_lastgang:ro
