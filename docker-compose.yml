@@ -2,7 +2,7 @@ services:
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     container_name: oberbueren-lastgang-ha-dev
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "8123:8123"
     environment:
