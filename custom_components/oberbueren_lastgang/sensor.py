@@ -239,7 +239,8 @@ class AggregateCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 result[f"{prefix}_{period.key}"] = value
 
         # Monthly demand-charge basis: the single highest hourly max
-        # power (kW) within the current / last calendar month.
+        # power (kW) within the current / last calendar month, plus the
+        # hour it occurred in (billed on the max, not the mean).
         power_id = build_power_statistic_id(self._objekt_id)
         for period_key in ("current_month", "last_month"):
             period = _PERIOD_BY_KEY[period_key]
@@ -251,7 +252,17 @@ class AggregateCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 start_local.astimezone(dt_util.UTC),
                 end_local.astimezone(dt_util.UTC),
             )
-            result[f"leistung_max_{period_key}"] = peak
+            if peak is None:
+                result[f"leistung_max_{period_key}"] = None
+                result[f"leistung_max_{period_key}_at"] = None
+            else:
+                peak_kw, peak_hour_utc = peak
+                result[f"leistung_max_{period_key}"] = peak_kw
+                result[f"leistung_max_{period_key}_at"] = (
+                    peak_hour_utc.astimezone(_LOCAL_TZ).isoformat(
+                        timespec="minutes"
+                    )
+                )
 
         cost_total_id = build_cost_statistic_id(self._objekt_id, COST_TOTAL_KEY)
         year_projection = await recorder.async_add_executor_job(
@@ -289,8 +300,9 @@ def _max_power_for(
     statistic_id: str,
     start_utc: datetime,
     end_utc: datetime,
-) -> float | None:
-    """Highest hourly ``max`` (kW) between two UTC times, or None if no data."""
+) -> tuple[float, datetime] | None:
+    """Highest hourly ``max`` (kW) between two UTC times and the hour it
+    fell in, or None if there's no data in the window."""
     rows = statistics_during_period(
         hass,
         start_utc,
@@ -300,8 +312,17 @@ def _max_power_for(
         None,
         {"max"},
     ).get(statistic_id, [])
-    vals = [r.get("max") for r in rows if r.get("max") is not None]
-    return float(max(vals)) if vals else None
+    best: tuple[float, datetime] | None = None
+    for r in rows:
+        mx = r.get("max")
+        if mx is None:
+            continue
+        ts = r.get("start")
+        if not isinstance(ts, datetime):
+            ts = datetime.fromtimestamp(float(ts), tz=dt_util.UTC)
+        if best is None or float(mx) > best[0]:
+            best = (float(mx), ts)
+    return best
 
 
 def _daily_change_map(
@@ -499,6 +520,8 @@ class DerivedSensorSpec:
     icon: str | None = None
     decimals: int = 2
     state_class: SensorStateClass | None = None
+    # Optional {attribute_name: coordinator_key} extra state attributes.
+    extra_attrs: tuple[tuple[str, str], ...] = ()
 
 
 _DERIVED_SPECS: tuple[DerivedSensorSpec, ...] = (
@@ -543,6 +566,7 @@ _DERIVED_SPECS: tuple[DerivedSensorSpec, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:flash",
         decimals=3,
+        extra_attrs=(("spitze_zeitpunkt", "leistung_max_current_month_at"),),
     ),
     DerivedSensorSpec(
         coordinator_key="leistung_max_last_month",
@@ -553,6 +577,7 @@ _DERIVED_SPECS: tuple[DerivedSensorSpec, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:flash",
         decimals=3,
+        extra_attrs=(("spitze_zeitpunkt", "leistung_max_last_month_at"),),
     ),
     DerivedSensorSpec(
         coordinator_key="cost_netznutzung_leistung_current_month",
@@ -732,3 +757,14 @@ class DerivedSensor(CoordinatorEntity[AggregateCoordinator], SensorEntity):
         if value is None:
             return None
         return round(value, self._spec.decimals)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self._spec.extra_attrs or self.coordinator.data is None:
+            return {}
+        out: dict[str, Any] = {}
+        for attr_name, coord_key in self._spec.extra_attrs:
+            value = self.coordinator.data.get(coord_key)
+            if value is not None:
+                out[attr_name] = value
+        return out

@@ -156,8 +156,8 @@ Zusätzlich zu den Langzeitstatistiken werden pro Zähler 21 Sensor-Entitäten e
 | Prognose Jahr                 | CHF     | Pro Tag: echter Wert → Vorjahr (falls importiert) → laufender Tagesschnitt |
 | Ø Tagesverbrauch (Monat)      | kWh     | Verbrauch ÷ Tage seit Monatsanfang  |
 | Ø Preis (Monat)               | Rp/kWh  | Effektiver Preis inkl. MwSt         |
-| Leistung Spitze (Monat)       | kW      | Höchste 15-Min-Mittelleistung seit Monatsanfang (Basis des Leistungspreises) |
-| Leistung Spitze (Letzter Monat) | kW    | Dieselbe Spitze für den kompletten Vormonat |
+| Leistung Spitze (Monat)       | kW      | Höchste 15-Min-Mittelleistung seit Monatsanfang (Basis des Leistungspreises). Attribut `spitze_zeitpunkt` = Stunde, in der die Spitze auftrat. |
+| Leistung Spitze (Letzter Monat) | kW    | Dieselbe Spitze für den kompletten Vormonat, ebenfalls mit `spitze_zeitpunkt`. |
 | Leistung Kosten (Monat)       | CHF     | Leistungspreis-Anteil des laufenden Monats |
 
 Die Kosten-Periodensensoren stellen eine Aufschlüsselung nach Kategorien über die Entity-Attribute bereit — öffne die Entität unter **Entwicklerwerkzeuge → Zustände**, um zu sehen, „woher der Betrag kommt“.
