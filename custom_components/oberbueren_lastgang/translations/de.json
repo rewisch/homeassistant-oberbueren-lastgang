@@ -69,6 +69,10 @@
         "end_date": {
           "name": "Enddatum",
           "description": "Letzter Tag (inklusiv). Default: gleiches Datum wie Start."
+        },
+        "force": {
+          "name": "Neu-Import erzwingen",
+          "description": "Jeden Tag im Bereich neu importieren, auch wenn die gespeicherten Daten bereits vollständig wirken (mindestens so viele Stunden und so viel Energie wie der frische Abruf). Nützlich, um Tage zu reparieren, die während Null-Platzhaltern des Upstreams importiert wurden."
         }
       }
     },

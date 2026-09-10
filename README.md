@@ -68,6 +68,17 @@ data:
 
 Tipp: Führe das Backfill in chronologischen Blöcken aus (z. B. jeweils ein Jahr), damit sich die kumulativen kWh-Summen korrekt aufbauen. Die Integration sendet eine HTTP-Anfrage pro Tag, daher benötigt ein ganzes Jahr etwa 365 Anfragen. Sei höflich und überlaste die API nicht.
 
+Ein Tag wird übersprungen, wenn die gespeicherten Daten bereits mindestens so viele Stunden **und** so viel Energie enthalten wie der frische Abruf. Falls ein Tag früher importiert wurde, während der Upstream noch Null-Platzhalter lieferte (voller Stundensatz, aber fast nur Nullwerte), heilt ein erneuter `backfill` diesen Tag automatisch, sobald echte Werte veröffentlicht sind. Mit `force: true` werden alle Tage im Bereich bedingungslos neu importiert:
+
+```yaml
+service: oberbueren_lastgang.backfill
+data:
+  entry_id: 01HX9Z7E8K2QY7CDXR...
+  start_date: 2024-01-01
+  end_date: 2024-12-31
+  force: true
+```
+
 ## Catch-up manuell auslösen
 
 Zum Testen oder zum manuellen Wiederholen nach einem temporären API-Fehler kannst du denselben Catch-up auslösen, der sonst beim HA-Start und zu den konfigurierten Poll-Zeiten läuft:

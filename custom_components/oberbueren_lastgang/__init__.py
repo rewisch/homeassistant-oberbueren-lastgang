@@ -55,6 +55,7 @@ _BACKFILL_SCHEMA = vol.Schema(
         vol.Required("entry_id"): cv.string,
         vol.Required(ATTR_START_DATE): cv.date,
         vol.Optional(ATTR_END_DATE): cv.date,
+        vol.Optional("force", default=False): cv.boolean,
     }
 )
 
@@ -167,17 +168,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry_id: str = call.data["entry_id"]
             start: date = call.data[ATTR_START_DATE]
             end: date = call.data.get(ATTR_END_DATE, start)
+            force: bool = call.data["force"]
 
             target = hass.data.get(DOMAIN, {}).get(entry_id)
             if target is None:
                 raise ValueError(f"Unknown config entry: {entry_id}")
 
-            count = await target.async_import_range(start, end)
+            count = await target.async_import_range(start, end, force=force)
             _LOGGER.info(
-                "Backfill complete: %d hourly points written for %s..%s",
+                "Backfill complete: %d hourly points written for %s..%s%s",
                 count,
                 start,
                 end,
+                " (forced)" if force else "",
             )
 
         hass.services.async_register(

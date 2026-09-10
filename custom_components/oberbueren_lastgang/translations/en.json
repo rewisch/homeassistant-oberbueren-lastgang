@@ -69,6 +69,10 @@
         "end_date": {
           "name": "End date",
           "description": "Last day (inclusive). Defaults to start date."
+        },
+        "force": {
+          "name": "Force re-import",
+          "description": "Re-import every day in the range even if the stored data already looks complete (as many hours and as much energy as the fresh fetch). Use to repair days first imported while upstream returned zero placeholders."
         }
       }
     },

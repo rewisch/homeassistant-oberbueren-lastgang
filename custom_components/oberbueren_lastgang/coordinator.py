@@ -25,10 +25,11 @@ from .api import ApiError, AuthError, OberbuerenClient
 from .const import ACTIVE_MESSLINIEN, CONF_METERINGCODE, CONF_NAME, CONF_OBJEKT_ID
 from .statistics import (
     aggregate_to_hourly_kwh,
-    async_count_stored_hours_per_day,
     async_get_last_imported_hour,
     async_import_many,
+    async_stored_coverage_per_day,
     build_statistic_id,
+    StoredDayCoverage,
 )
 from .tariffs import load_tariffs
 
@@ -41,11 +42,19 @@ _MAX_AUTO_CATCHUP_DAYS = 30
 # already stored. This is the antidote to "an early-morning slot
 # imported only a partial day because upstream hadn't published the
 # rest yet" — the next slot (or the next day's run) will see that the
-# stored count is below the now-published count and re-import. Without
-# this lookback the partial day would be locked in forever, because
-# "last imported day == yesterday" makes the simple anchor-based check
-# think we're done.
+# fresh fetch has more hours or more energy than what's stored and
+# re-import. Without this lookback the partial day would be locked in
+# forever, because "last imported day == yesterday" makes the simple
+# anchor-based check think we're done.
 _DAILY_LOOKBACK_DAYS = 3
+
+# A freshly fetched day is only re-imported over an existing one if it
+# brings at least this many extra kWh (or more hours). The margin keeps
+# floating-point noise between two fetches of the same day from
+# triggering a pointless re-import, while still being far below the
+# ~10–20 kWh gap left by a day that was first stored as mostly-zero
+# placeholders.
+_KWH_REIMPORT_MARGIN = 0.05
 
 _LOCAL_TZ = ZoneInfo("Europe/Zurich")
 
@@ -77,7 +86,9 @@ class LastgangCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.meteringcode: str = entry.data[CONF_METERINGCODE]
         self.friendly_name: str = entry.data[CONF_NAME]
 
-    async def async_import_range(self, start: date, end: date) -> int:
+    async def async_import_range(
+        self, start: date, end: date, *, force: bool = False
+    ) -> int:
         """Import all days in ``[start, end]`` (inclusive) for active Messlinien.
 
         For each (day, Messlinie) we fetch upstream and then decide
@@ -85,13 +96,21 @@ class LastgangCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
           * Upstream raised or returned no usable points → leave
             stored data alone (never destroy on transient failure).
-          * Stored hourly-point count for the day is already ≥ the
-            count produced by the new response → skip the (expensive)
-            import path. This makes daily re-checks of recent days a
-            cheap no-op once the day is complete.
+          * The stored day already has at least as many hours *and* at
+            least as much energy as the fresh response → skip the
+            (expensive) import path. Comparing energy as well as hour
+            count is what lets a day that was first stored as mostly
+            ``0.000`` placeholders heal once upstream publishes the real
+            values — an hour-count-only check treated its full 24 rows
+            as "complete" forever.
           * Otherwise → enqueue the response. ``async_import_many``
             takes the merge path which correctly splices new hours
             into an existing partial day.
+
+        ``force=True`` skips the "already good enough" check and
+        re-imports every day that upstream returns data for — used by
+        the ``backfill`` service's ``force`` option to rebuild a range
+        unconditionally.
 
         Days are processed in chronological order so the cumulative
         sum stays monotonically increasing. Failures on individual
@@ -104,7 +123,7 @@ class LastgangCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         total_imported = 0
         for messlinie in ACTIVE_MESSLINIEN:
             stat_id = build_statistic_id(self.objekt_id, messlinie)
-            stored_per_day = await async_count_stored_hours_per_day(
+            stored_per_day = await async_stored_coverage_per_day(
                 self.hass, stat_id, start, end, _LOCAL_TZ,
             )
 
@@ -138,19 +157,31 @@ class LastgangCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current += timedelta(days=1)
                     continue
 
-                stored = stored_per_day.get(current, 0)
-                if len(new_hourly) <= stored:
+                new_hours = len(new_hourly)
+                new_kwh = sum(kwh for _, kwh in new_hourly)
+                stored = stored_per_day.get(
+                    current, StoredDayCoverage(hours=0, kwh=0.0)
+                )
+                if (
+                    not force
+                    and new_hours <= stored.hours
+                    and new_kwh <= stored.kwh + _KWH_REIMPORT_MARGIN
+                ):
                     _LOGGER.debug(
-                        "Day %s already complete for %s (%d stored vs "
-                        "%d new) — skipping import.",
-                        current, messlinie.label, stored, len(new_hourly),
+                        "Day %s already complete for %s (stored %dh/%.2f kWh "
+                        "vs new %dh/%.2f kWh) — skipping import.",
+                        current, messlinie.label,
+                        stored.hours, stored.kwh, new_hours, new_kwh,
                     )
                     current += timedelta(days=1)
                     continue
 
                 _LOGGER.info(
-                    "Importing %s for %s: %d stored → %d new hourly point(s)",
-                    current, messlinie.label, stored, len(new_hourly),
+                    "Importing %s for %s: stored %dh/%.2f kWh → "
+                    "new %dh/%.2f kWh%s",
+                    current, messlinie.label,
+                    stored.hours, stored.kwh, new_hours, new_kwh,
+                    " (forced)" if force else "",
                 )
                 responses.append(response)
                 current += timedelta(days=1)

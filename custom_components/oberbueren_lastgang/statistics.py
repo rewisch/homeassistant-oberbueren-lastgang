@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import (
@@ -172,19 +172,29 @@ async def async_get_last_imported_hour(
     return datetime.fromtimestamp(float(start), tz=timezone.utc)
 
 
-async def async_count_stored_hours_per_day(
+class StoredDayCoverage(NamedTuple):
+    """What is already stored for one local day: hour count and total kWh."""
+
+    hours: int
+    kwh: float
+
+
+async def async_stored_coverage_per_day(
     hass: HomeAssistant,
     statistic_id: str,
     start: date,
     end: date,
     local_tz: tzinfo,
-) -> dict[date, int]:
-    """Return ``{local_date: hourly_point_count}`` over ``[start, end]``.
+) -> dict[date, StoredDayCoverage]:
+    """Return ``{local_date: StoredDayCoverage(hours, kwh)}`` over ``[start, end]``.
 
-    Used by the daily catch-up to decide whether a freshly fetched day
-    actually has *more* coverage than what's already stored before
-    triggering a (potentially expensive) re-import. A day not present
-    in the result has zero stored points.
+    Used by the daily catch-up / backfill to decide whether a freshly
+    fetched day is actually *better* than what's already stored before
+    triggering a (potentially expensive) re-import. We compare both the
+    hour count and the summed energy: a day that upstream first served
+    as mostly ``0.000`` placeholders lands with a full 24 rows but a tiny
+    kWh total, so an hour-count check alone would wrongly treat it as
+    complete forever. A day not present in the result has zero coverage.
     """
     range_start_local = datetime.combine(
         start, datetime.min.time(), tzinfo=local_tz
@@ -203,15 +213,22 @@ async def async_count_stored_hours_per_day(
         hass, range_start_utc, range_end_utc,
         {statistic_id}, "hour", None, {"change"},
     )
-    counts: dict[date, int] = {}
+    hours: dict[date, int] = {}
+    kwh: dict[date, float] = {}
     for row in rows.get(statistic_id, []):
         ts = row.get("start")
         if not isinstance(ts, datetime):
             ts = datetime.fromtimestamp(float(ts), tz=timezone.utc)
         local_date = ts.astimezone(local_tz).date()
         if start <= local_date <= end:
-            counts[local_date] = counts.get(local_date, 0) + 1
-    return counts
+            hours[local_date] = hours.get(local_date, 0) + 1
+            kwh[local_date] = kwh.get(local_date, 0.0) + float(
+                row.get("change") or 0.0
+            )
+    return {
+        d: StoredDayCoverage(hours=h, kwh=kwh.get(d, 0.0))
+        for d, h in hours.items()
+    }
 
 
 async def _async_read_existing_hourly_kwh(
