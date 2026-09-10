@@ -1,14 +1,20 @@
 # Default-Tarife für Strom Oberbüren (Privatkunden / Kundengruppe Haushalt).
 #
-# Diese Datei wird von der Integration einmalig nach
+# VERWALTETE DATEI. Standardmässig hält die Integration
 #   <HA-config>/oberbueren_lastgang_tariffs.yaml
-# kopiert, wenn dort noch keine eigene Datei existiert. Spätere
-# Integrations-Updates überschreiben deine User-Datei NICHT.
+# mit dieser mitgelieferten Version synchron: erscheint mit einem Update
+# eine neue Version (z. B. neue Jahrespreise), wird deine Kopie ersetzt
+# und die Kosten werden aus den vorhandenen Daten neu berechnet — ganz
+# ohne API-Aufrufe.
 #
-# Bei Tarifänderung (typisch: 1. Januar): in deiner User-Datei einen
-# weiteren Block mit neuem ``valid_from`` anhängen und beim bisherigen
-# Block ein ``valid_until`` setzen. Die Integration liest die Datei bei
-# jedem Import neu — kein HA-Restart nötig.
+# Willst du die Datei selbst pflegen: in den Integrations-Optionen
+# „Tarifdatei automatisch verwalten“ ausschalten. Danach lässt die
+# Integration deine Datei unangetastet (legt sie nur an, wenn sie fehlt).
+# Eine von Hand geänderte Datei wird auch bei aktiver Verwaltung nicht
+# überschrieben — stattdessen erscheint ein Reparatur-Hinweis.
+#
+# Die Integration liest die Datei bei jedem Import neu — kein HA-Restart
+# nötig.
 #
 # Werte sind ohne MwSt. (mwst_default wird automatisch addiert). Per-
 # Position Override z.B. ``netzzuschlag_mwst: 0`` falls eine Position

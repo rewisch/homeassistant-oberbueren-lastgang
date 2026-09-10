@@ -21,6 +21,7 @@ Wednesday at 10:00 still counts as HT.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -237,45 +238,112 @@ def load_tariffs(config_dir: Path | str) -> TariffDatabase:
     return TariffDatabase(periods)
 
 
-# Bundled with the integration — copied to the user's HA config dir on
-# first setup if (and only if) they don't already have a file there.
+# Bundled with the integration.
 _BUNDLED_DEFAULT_FILENAME = "default_tariffs.yaml"
 
+# Sidecar file holding the sha256 of the bundled content we last wrote to
+# the user's tariff file. Lets us tell "still our managed copy" from
+# "the user edited it".
+_STAMP_FILENAME = ".oberbueren_lastgang_tariffs.hash"
 
-def install_default_tariffs_if_missing(config_dir: Path | str) -> Path:
-    """Copy the integration's bundled default tariffs to the user's config.
+# sha256 of every ``default_tariffs.yaml`` the integration shipped before
+# the stamp file existed (≤ v0.7.5). An untouched copy of one of these is
+# still recognised as ours and gets updated in place.
+_LEGACY_MANAGED_HASHES: frozenset[str] = frozenset(
+    {
+        # v0.2.1 … v0.7.5 (2026 HT/NT defaults, unchanged for years)
+        "23bb2ee3f8dcffa38f5191371e05bb8d9310a0506b87f8a7203abeca42e2a52e",
+    }
+)
 
-    Idempotent: does nothing if the user's file already exists. Updates
-    of the integration therefore never overwrite user edits — the user
-    fully owns ``<HA-config>/oberbueren_lastgang_tariffs.yaml`` once it
-    has been written for the first time.
+SyncResult = Literal[
+    "created", "updated", "unchanged", "unmanaged", "user_modified"
+]
 
-    If the integration package somehow ships without the bundled
-    default (shouldn't happen via HACS but is possible during local
-    development), we fall back to the embedded placeholder so the user
-    at least gets *some* file with the right shape.
-    """
-    user_path = Path(config_dir) / TARIFFS_FILENAME
-    if user_path.exists():
-        return user_path
 
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _bundled_tariffs_text() -> str:
+    """Bundled ``default_tariffs.yaml`` text, or the embedded placeholder
+    when running from a checkout that somehow lacks the file."""
     bundled = Path(__file__).parent / _BUNDLED_DEFAULT_FILENAME
     if bundled.exists():
-        user_path.write_text(
-            bundled.read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        return bundled.read_text(encoding="utf-8")
+    _LOGGER.warning(
+        "Bundled %s missing — falling back to the embedded placeholder",
+        _BUNDLED_DEFAULT_FILENAME,
+    )
+    return _EXAMPLE_YAML
+
+
+def sync_managed_tariffs(config_dir: Path | str, manage: bool) -> SyncResult:
+    """Keep ``<config>/oberbueren_lastgang_tariffs.yaml`` in step with the
+    bundled Oberbüren defaults.
+
+    This integration is specific to one utility, so by default the tariff
+    file is *managed*: a new bundled version (e.g. a new-year price change
+    shipped with an update) replaces the user's copy automatically. A
+    user who wants to hand-tune the file turns the "manage tariffs"
+    option off, and then this only ever creates the file when missing.
+
+    Outcomes:
+
+    * ``created``       — no user file existed; wrote the bundled defaults.
+    * ``unchanged``     — user file already byte-identical to the bundled.
+    * ``updated``       — user file was our unmodified managed copy (or a
+      known older shipped default) and a newer bundled version replaced it.
+    * ``unmanaged``     — ``manage`` is False; left an existing file alone.
+    * ``user_modified`` — file differs from both the bundled version and
+      our last managed copy → hand-edited; left untouched. The caller
+      surfaces a repair notice.
+    """
+    cfg = Path(config_dir)
+    user_path = cfg / TARIFFS_FILENAME
+    stamp_path = cfg / _STAMP_FILENAME
+
+    bundled = _bundled_tariffs_text()
+    bundled_hash = _sha256(bundled)
+
+    if not user_path.exists():
+        user_path.write_text(bundled, encoding="utf-8")
+        stamp_path.write_text(bundled_hash, encoding="utf-8")
+        _LOGGER.info("Installed managed tariff file at %s", user_path)
+        return "created"
+
+    if not manage:
+        return "unmanaged"
+
+    current = user_path.read_text(encoding="utf-8")
+    current_hash = _sha256(current)
+    stamp = (
+        stamp_path.read_text(encoding="utf-8").strip()
+        if stamp_path.exists()
+        else None
+    )
+
+    if current_hash == bundled_hash:
+        if stamp != bundled_hash:
+            stamp_path.write_text(bundled_hash, encoding="utf-8")
+        return "unchanged"
+
+    is_our_copy = current_hash == stamp or current_hash in _LEGACY_MANAGED_HASHES
+    if is_our_copy:
+        user_path.write_text(bundled, encoding="utf-8")
+        stamp_path.write_text(bundled_hash, encoding="utf-8")
         _LOGGER.info(
-            "Installed bundled default tariffs at %s (copied from %s)",
-            user_path, bundled,
+            "Updated managed tariff file %s to the bundled version", user_path
         )
-    else:
-        user_path.write_text(_EXAMPLE_YAML, encoding="utf-8")
-        _LOGGER.warning(
-            "Bundled default tariffs missing at %s — wrote placeholder "
-            "template to %s; please review",
-            bundled, user_path,
-        )
-    return user_path
+        return "updated"
+
+    _LOGGER.warning(
+        "Tariff file %s was edited — auto-update skipped. Turn off "
+        "'manage tariffs' in the options to keep your edits, or delete "
+        "the file to adopt the bundled version.",
+        user_path,
+    )
+    return "user_modified"
 
 
 class TariffError(Exception):

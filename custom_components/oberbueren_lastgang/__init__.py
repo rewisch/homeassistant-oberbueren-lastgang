@@ -21,6 +21,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_track_time_change
 
 from .api import ApiError, AuthError, OberbuerenClient
@@ -32,8 +33,10 @@ from .const import (
     CONF_BASE_URL,
     CONF_DEBUG_LOGGING,
     CONF_EMAIL,
+    CONF_MANAGE_TARIFFS,
     CONF_PASSWORD,
     CONF_POLL_HOURS,
+    DEFAULT_MANAGE_TARIFFS,
     DEFAULT_POLL_HOURS,
     DOMAIN,
     SERVICE_BACKFILL,
@@ -41,7 +44,9 @@ from .const import (
 )
 from .coordinator import LastgangCoordinator
 from .statistics import async_recompute_costs
-from .tariffs import install_default_tariffs_if_missing, load_tariffs
+from .tariffs import load_tariffs, sync_managed_tariffs
+
+_TARIFFS_ISSUE_ID = "tariffs_user_modified"
 
 SERVICE_RECOMPUTE_COSTS = "recompute_costs"
 
@@ -151,15 +156,54 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # Seed the user's tariffs file from the integration's bundled default
-    # on first setup. Idempotent: never overwrites once the user has the
-    # file, so HACS upgrades won't blow away their edits or annual
-    # tariff additions.
-    await hass.async_add_executor_job(
-        install_default_tariffs_if_missing, hass.config.config_dir
+    # Keep the tariff file in step with the bundled Oberbüren defaults.
+    # Managed by default (this integration serves one utility); the user
+    # can turn it off in the options to hand-manage the file.
+    manage_tariffs = bool(
+        entry.options.get(CONF_MANAGE_TARIFFS, DEFAULT_MANAGE_TARIFFS)
     )
+    tariff_sync = await hass.async_add_executor_job(
+        sync_managed_tariffs, hass.config.config_dir, manage_tariffs
+    )
+    if tariff_sync == "user_modified":
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            _TARIFFS_ISSUE_ID,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=_TARIFFS_ISSUE_ID,
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, _TARIFFS_ISSUE_ID)
 
-    # Bring up the sensor platform (8 aggregate entities per meter).
+    if tariff_sync == "updated":
+        # A new bundled tariff version replaced the file — refresh every
+        # cost statistic from the data already in HA (no API calls).
+        async def _recompute_after_tariff_update() -> None:
+            tariffs = await hass.async_add_executor_job(
+                load_tariffs, hass.config.config_dir
+            )
+            if tariffs.is_empty:
+                return
+            total = 0
+            for messlinie in ACTIVE_MESSLINIEN:
+                total += await async_recompute_costs(
+                    hass, coordinator.objekt_id, messlinie,
+                    coordinator.friendly_name, tariffs,
+                )
+            _LOGGER.info(
+                "Tariff file updated to the bundled version — recomputed "
+                "%d hourly cost point(s) for %s from stored data",
+                total, coordinator.friendly_name,
+            )
+
+        entry.async_create_background_task(
+            hass, _recompute_after_tariff_update(),
+            name=f"{DOMAIN}.tariff_recompute",
+        )
+
+    # Bring up the sensor platform (aggregate entities per meter).
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register the backfill service exactly once, on the first entry setup.

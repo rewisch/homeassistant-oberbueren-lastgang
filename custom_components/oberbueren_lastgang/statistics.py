@@ -716,13 +716,21 @@ async def async_recompute_costs(
     friendly_name: str,
     tariffs: TariffDatabase,
 ) -> int:
-    """Rebuild cost statistics from existing kWh statistics — no API calls.
+    """Rebuild cost statistics from data already in HA — no API calls.
 
-    Reads every available hourly kWh ``change`` (and hourly max power for
-    the demand charge) from the recorder for the given Messlinie, applies
-    the current tariff database, and overwrites every cost statistic from
-    scratch (anchor = 0). Use this after editing the tariff file or when
-    the cost feature was enabled on top of pre-existing kWh data.
+    Reads every available hourly kWh ``change`` (and the real hourly power
+    series, for the demand charge) from the recorder for the given
+    Messlinie, applies the current tariff database, and overwrites every
+    cost statistic from scratch (anchor = 0). Use this after editing the
+    tariff file (e.g. switching to the 2027 regime) or when the cost
+    feature was enabled on top of pre-existing kWh data.
+
+    The monthly demand charge needs the 15-minute-derived power series
+    (written by imports). For hours where it is absent — data imported
+    before that series existed — ``cost_netznutzung_leistung`` stays 0
+    for that month until a real ``backfill`` re-fetches the 15-minute
+    data. We deliberately do not approximate the peak from hourly kWh:
+    the demand charge must be billed on an accurate 15-minute figure.
 
     Returns the number of hourly points recomputed; 0 if no kWh stats
     exist for the Messlinie or the Messlinie is non-consumption.
@@ -747,9 +755,9 @@ async def async_recompute_costs(
     hourly_kwh = sorted(existing.items())
     total_kwh = sum(k for _, k in hourly_kwh)
 
-    # Hourly max power feeds the monthly demand charge. Absent for hours
-    # imported before the power series existed → those months simply get
-    # no Leistung cost (which is correct: it's a 2027+ position anyway).
+    # Real (15-min-derived) power series feeds the monthly demand charge.
+    # Absent for hours imported before the power series existed → those
+    # months get no Leistung cost until a real backfill fills them.
     power = await _async_read_existing_hourly_power(
         hass, build_power_statistic_id(objekt_id)
     )
@@ -757,7 +765,7 @@ async def async_recompute_costs(
 
     _LOGGER.info(
         "Recompute source for %s: %d hourly kWh rows, %.3f kWh total, "
-        "%d hourly power rows, first=%s, last=%s",
+        "%d real hourly power rows, first=%s, last=%s",
         kwh_id, len(hourly_kwh), total_kwh, len(peak_map),
         hourly_kwh[0][0].isoformat(),
         hourly_kwh[-1][0].isoformat(),

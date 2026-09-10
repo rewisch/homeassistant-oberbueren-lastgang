@@ -48,8 +48,10 @@ Kein manueller „Fix issues in Statistics“-Workaround mehr nötig.
 
 Auf der Integrations-Kachel (**Einstellungen → Geräte & Dienste → Strom Oberbüren Lastgang**) gibt es zwei Buttons:
 
-* **Konfigurieren** — Poll-Stunden auswählen (Multi-Select 01–23, Default `6, 7, 8, 9`).
-* **Ausführliches Debug-Logging** — schreibt Request-Parameter, HTTP-Status, Fehlerbody-Ausschnitte und Antwortgrössen ins Log. Passwort wird nicht geloggt.
+* **Konfigurieren** — im Options-Dialog:
+  * *Poll-Zeiten* auswählen (Multi-Select 01–23, Default `6, 7, 8, 9`).
+  * *Ausführliches Debug-Logging* — schreibt Request-Parameter, HTTP-Status, Fehlerbody-Ausschnitte und Antwortgrössen ins Log. Passwort wird nicht geloggt.
+  * *Tarifdatei automatisch verwalten* (Default an) — hält `oberbueren_lastgang_tariffs.yaml` mit den mitgelieferten Standardtarifen synchron. Ausschalten, um die Datei selbst zu pflegen.
 * **Neu konfigurieren** — URL, E-Mail, Passwort, Anzeigename und Zähler-IDs ändern. Die Zugangsdaten werden beim Speichern erneut gegen die angegebene URL geprüft.
 
 Nach dem Speichern wird die Integration automatisch neu geladen — kein HA-Neustart nötig.
@@ -164,14 +166,15 @@ Die Aktualisierung erfolgt stündlich, sodass die Werte innerhalb einer Stunde n
 
 ## Tarifkonfiguration (Kostenberechnung)
 
-Die Integration enthält den **aktuellen Oberbüren-Tarif** bereits integriert.
-Beim ersten Setup kopiert sie die mitgelieferten Standardwerte nach
-`<HA-config>/oberbueren_lastgang_tariffs.yaml` — du musst nichts tun, damit die Kostenstatistiken sofort funktionieren.
+Die Integration enthält den **aktuellen Oberbüren-Tarif** bereits integriert — du musst nichts tun, damit die Kostenstatistiken sofort funktionieren.
 
-**Updates überschreiben deine Datei niemals.** Sobald diese Datei existiert, lässt die Integration sie dauerhaft unangetastet — selbst bei HACS-Upgrades. Du kannst also Preise ändern, Tarifperioden hinzufügen oder positionsspezifische MwSt-Overrides anwenden, ohne Angst zu haben, deine Änderungen zu verlieren.
+**Standardmässig ist `<HA-config>/oberbueren_lastgang_tariffs.yaml` eine verwaltete Datei.** Da diese Integration nur für Oberbüren ist, hält sie deine Kopie automatisch mit den mitgelieferten Standardtarifen synchron: bringt ein Update eine neue Version (z. B. die Preise fürs neue Jahr), wird deine Datei ersetzt und die Kosten werden **aus den bereits in HA vorhandenen Daten neu berechnet — ohne API-Aufrufe** (`recompute_costs` läuft automatisch).
 
-Wenn sich der offizielle Oberbüren-Tarif ändert (typischerweise am 1. Januar), werden die mitgelieferten Standardwerte im Repository aktualisiert — deine lokale Datei bleibt jedoch unverändert.
-Um neue Standardwerte zu übernehmen, kannst du entweder die mitgelieferte `default_tariffs.yaml` vergleichen und Änderungen übernehmen oder deine Datei löschen und HA neu starten, damit sie aus den neuen Standardwerten neu erzeugt wird.
+Willst du die Datei selbst pflegen: schalte in den Integrations-Optionen (**Einstellungen → Geräte & Dienste → Strom Oberbüren Lastgang → Konfigurieren**) **„Tarifdatei automatisch verwalten"** aus. Danach legt die Integration die Datei nur noch an, wenn sie fehlt, und fasst sie sonst nie wieder an.
+
+Eine **von Hand geänderte** Datei wird selbst bei aktiver Verwaltung nie überschrieben — stattdessen erscheint ein Reparatur-Hinweis mit den zwei Auswegen (Option ausschalten, oder Datei löschen und Integration neu laden).
+
+Die Kosten lassen sich jederzeit ohne API-Aufruf neu berechnen — der Dienst `oberbueren_lastgang.recompute_costs` wendet die aktuelle Tarifdatei auf die gespeicherten kWh-Daten an. Der Leistungspreis braucht dafür allerdings die 15-Minuten-Leistungsdaten (`…_leistung`); für Zeiträume ohne diese Daten bleibt er 0, bis ein echtes `backfill` sie nachlädt.
 
 Das Dateiformat — jede Periode trägt nur die Positionen, die für sie gelten. Fehlende Positionen werden still übersprungen, sodass das **HT/NT-Modell (bis 2026)** und das **Einheitstarif- + Saison- + Leistungs-Modell (ab 2027)** nach Datum nebeneinander bestehen:
 

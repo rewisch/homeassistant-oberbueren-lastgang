@@ -16,6 +16,11 @@ CONF_NAME: Final = "name"
 CONF_BASE_URL: Final = "base_url"
 CONF_POLL_HOURS: Final = "poll_hours"
 CONF_DEBUG_LOGGING: Final = "debug_logging"
+# When true (default) the integration keeps
+# ``oberbueren_lastgang_tariffs.yaml`` in sync with the bundled Oberbüren
+# defaults on every setup; turn off to hand-manage that file.
+CONF_MANAGE_TARIFFS: Final = "manage_tariffs"
+DEFAULT_MANAGE_TARIFFS: Final = True
 
 # Daily poll: previous day at these local hours (must all be > 0 because data is
 # for yesterday). We fire at multiple hours because the upstream API occasionally

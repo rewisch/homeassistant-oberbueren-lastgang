@@ -48,7 +48,11 @@
         "description": "Pick one or more times of day at which yesterday's data is fetched. Multiple slots act as automatic retries in case the server hasn't published the data yet or returns an error on the first attempt.",
         "data": {
           "poll_hours": "Poll times",
-          "debug_logging": "Verbose debug logging"
+          "debug_logging": "Verbose debug logging",
+          "manage_tariffs": "Manage tariff file automatically"
+        },
+        "data_description": {
+          "manage_tariffs": "When on, the integration keeps oberbueren_lastgang_tariffs.yaml in sync with the bundled Oberbüren default tariffs (e.g. new yearly prices). Turn off to hand-manage the file."
         }
       }
     }
@@ -95,6 +99,12 @@
           "description": "Which configured account to recompute."
         }
       }
+    }
+  },
+  "issues": {
+    "tariffs_user_modified": {
+      "title": "Tariff file was hand-edited",
+      "description": "Your oberbueren_lastgang_tariffs.yaml differs from the bundled version, so the automatic update was skipped. If that is intended, turn off “Manage tariff file automatically” in the integration options. Otherwise delete the file and reload the integration to adopt the bundled version."
     }
   }
 }

@@ -48,7 +48,11 @@
         "description": "Wähle eine oder mehrere Tageszeiten, zu denen die Daten von gestern abgerufen werden. Mehrere Slots wirken als automatische Wiederholungen, falls der Server beim ersten Versuch noch keine Daten hat oder einen Fehler liefert.",
         "data": {
           "poll_hours": "Poll-Zeiten",
-          "debug_logging": "Ausführliches Debug-Logging"
+          "debug_logging": "Ausführliches Debug-Logging",
+          "manage_tariffs": "Tarifdatei automatisch verwalten"
+        },
+        "data_description": {
+          "manage_tariffs": "Wenn aktiv, hält die Integration oberbueren_lastgang_tariffs.yaml mit den mitgelieferten Oberbüren-Standardtarifen synchron (z. B. neue Jahrespreise). Deaktivieren, um die Datei selbst zu pflegen."
         }
       }
     }
@@ -95,6 +99,12 @@
           "description": "Welche konfigurierte Anmeldung soll neu berechnet werden."
         }
       }
+    }
+  },
+  "issues": {
+    "tariffs_user_modified": {
+      "title": "Tarifdatei wurde manuell geändert",
+      "description": "Deine oberbueren_lastgang_tariffs.yaml weicht von der mitgelieferten Version ab, deshalb wurde die automatische Aktualisierung übersprungen. Ist das gewollt, schalte in den Integrations-Optionen „Tarifdatei automatisch verwalten“ aus. Andernfalls lösche die Datei und lade die Integration neu, um die mitgelieferte Version zu übernehmen."
     }
   }
 }

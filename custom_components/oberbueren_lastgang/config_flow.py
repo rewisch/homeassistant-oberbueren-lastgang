@@ -46,11 +46,13 @@ from .const import (
     CONF_BASE_URL,
     CONF_DEBUG_LOGGING,
     CONF_EMAIL,
+    CONF_MANAGE_TARIFFS,
     CONF_METERINGCODE,
     CONF_NAME,
     CONF_OBJEKT_ID,
     CONF_PASSWORD,
     CONF_POLL_HOURS,
+    DEFAULT_MANAGE_TARIFFS,
     DEFAULT_POLL_HOURS,
     DOMAIN,
 )
@@ -264,6 +266,11 @@ class OberbuerenOptionsFlow(OptionsFlow):
                     CONF_DEBUG_LOGGING: bool(
                         user_input.get(CONF_DEBUG_LOGGING, False)
                     ),
+                    CONF_MANAGE_TARIFFS: bool(
+                        user_input.get(
+                            CONF_MANAGE_TARIFFS, DEFAULT_MANAGE_TARIFFS
+                        )
+                    ),
                 },
             )
 
@@ -271,6 +278,9 @@ class OberbuerenOptionsFlow(OptionsFlow):
             CONF_POLL_HOURS, list(DEFAULT_POLL_HOURS)
         )
         debug_logging = self.config_entry.options.get(CONF_DEBUG_LOGGING, False)
+        manage_tariffs = self.config_entry.options.get(
+            CONF_MANAGE_TARIFFS, DEFAULT_MANAGE_TARIFFS
+        )
         # Hour 0 is excluded: at 00:00 local "yesterday" just rolled over and
         # upstream definitely doesn't have its data ready yet.
         hour_options = [
@@ -291,6 +301,10 @@ class OberbuerenOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_DEBUG_LOGGING,
                     default=debug_logging,
+                ): BooleanSelector(),
+                vol.Optional(
+                    CONF_MANAGE_TARIFFS,
+                    default=manage_tariffs,
                 ): BooleanSelector(),
             }
         )
