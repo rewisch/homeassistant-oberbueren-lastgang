@@ -36,6 +36,16 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 
+# ``unit_class`` becomes mandatory in metadata from HA 2026.11. HA derives
+# it from the unit via this map (energy/power/…); units without a
+# converter (CHF) get ``None``. Guarded import keeps older HA working.
+try:
+    from homeassistant.components.recorder.statistics import (
+        STATISTIC_UNIT_TO_UNIT_CONVERTER as _UNIT_CONVERTERS,
+    )
+except ImportError:                                            # pragma: no cover
+    _UNIT_CONVERTERS = {}
+
 # StatisticMeanType is the modern way to declare a statistic's mean
 # behaviour — older HA used ``has_mean``. Both fields are accepted by
 # current HA, but ``mean_type`` is required from 2026.11 onward.
@@ -370,6 +380,7 @@ def _build_meta(
     uses ``has_mean=True`` instead so HA stores/plots hourly mean with a
     min/max band.
     """
+    converter = _UNIT_CONVERTERS.get(unit)
     kwargs: dict = {
         "has_mean": has_mean,
         "has_sum": has_sum,
@@ -377,6 +388,10 @@ def _build_meta(
         "source": DOMAIN,
         "statistic_id": statistic_id,
         "unit_of_measurement": unit,
+        # Required from HA 2026.11. Derived the same way HA does: the
+        # converter's UNIT_CLASS for known units (kWh→energy, kW→power),
+        # None for units without one (CHF).
+        "unit_class": getattr(converter, "UNIT_CLASS", None),
     }
     if _MEAN_TYPE_NONE is not None:
         kwargs["mean_type"] = _MEAN_TYPE_ARITHMETIC if has_mean else _MEAN_TYPE_NONE
