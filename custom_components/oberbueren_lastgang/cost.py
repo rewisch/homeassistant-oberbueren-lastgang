@@ -4,12 +4,14 @@ Given a list of hourly kWh measurements and a TariffDatabase, produce
 the same list of hours expanded with cost figures for each of the five
 cost categories (plus a ``total`` rollup):
 
-  * ``netznutzung_wirkstrom``     — kWh × HT/NT rate × MwSt-Faktor
+  * ``netznutzung_wirkstrom``     — kWh × HT/NT- bzw. Einheitstarif × MwSt
   * ``netznutzung_grundgebuehr``  — Fixkosten anteilig pro Stunde des Monats
-  * ``energiebezug_wirkstrom``    — kWh × HT/NT rate × MwSt-Faktor
-  * ``energiebezug_zuschlaege``   — kWh × Σ(4 Zuschlagspositionen × ihrer MwSt)
+  * ``netznutzung_leistung``      — Monatsspitze (kW) × Leistungspreis ×
+                                    MwSt, komplett auf die Spitzenstunde
+  * ``energiebezug_wirkstrom``    — kWh × HT/NT- bzw. Sommer/Winter × MwSt
+  * ``energiebezug_zuschlaege``   — kWh × Σ(Zuschlagspositionen × ihrer MwSt)
   * ``messtarif``                 — Fixkosten anteilig pro Stunde des Monats
-  * ``total``                     — Σ obiger fünf
+  * ``total``                     — Σ obiger sechs
 
 Rates in the YAML are in Rappen per kWh (variable) or CHF per month
 (fixed); we convert to CHF per kWh internally so all sums end up in CHF.
@@ -29,7 +31,11 @@ from .tariffs import (
     TariffDatabase,
     TariffPeriod,
     is_hochtarif,
+    is_summer,
 )
+
+# YAML key of the monthly-peak Leistungspreis position.
+_LEISTUNG_KEY = "netznutzung.leistung"
 
 _LOGGER = logging.getLogger(__name__)
 _LOCAL_TZ = ZoneInfo("Europe/Zurich")
@@ -41,6 +47,7 @@ _RP_TO_CHF = 0.01
 def compute_hourly_costs(
     hourly_kwh: list[tuple[datetime, float]],
     tariffs: TariffDatabase,
+    hourly_peak_kw: dict[datetime, float] | None = None,
 ) -> dict[str, list[tuple[datetime, float]]]:
     """Expand hourly kWh into per-category hourly cost (CHF, incl. MwSt).
 
@@ -50,6 +57,14 @@ def compute_hourly_costs(
     the user's earliest valid_from) are recorded as 0.0 cost across all
     categories rather than being dropped, so the chronological alignment
     with the kWh series is preserved.
+
+    ``hourly_peak_kw`` maps each ``hour_utc`` to the highest 15-minute
+    average power (kW) observed in that hour. When given (and the tariff
+    period has a ``power_monthly`` Leistungspreis), the monthly demand
+    charge — ``month_peak_kw × rate × MwSt`` — is added in full to the
+    single hour that set that calendar month's peak, and zero to every
+    other hour. Callers that pass only a partial month get a provisional
+    lump; a later month-scoped rebuild over the full month corrects it.
     """
     out: dict[str, list[tuple[datetime, float]]] = {
         key: [] for key in (*COST_CATEGORY_KEYS, COST_TOTAL_KEY)
@@ -84,7 +99,53 @@ def compute_hourly_costs(
             out[key].append((hour_utc, per_category[key]))
         out[COST_TOTAL_KEY].append((hour_utc, total))
 
+    if hourly_peak_kw:
+        _inject_leistung_lumps(out, hourly_peak_kw, tariffs)
+
     return out
+
+
+def _inject_leistung_lumps(
+    out: dict[str, list[tuple[datetime, float]]],
+    hourly_peak_kw: dict[datetime, float],
+    tariffs: TariffDatabase,
+) -> None:
+    """Add each calendar month's demand charge to its peak hour in-place.
+
+    ``out`` is the dict built by ``compute_hourly_costs`` — parallel
+    ``(hour_utc, chf)`` lists. We locate the hour that set every month's
+    15-minute peak, compute ``peak_kw × Leistungspreis × MwSt`` from the
+    tariff period covering that hour, and fold it into both the
+    ``netznutzung_leistung`` bucket and ``total`` at that index.
+    """
+    idx_by_hour = {
+        hour_utc: i
+        for i, (hour_utc, _) in enumerate(out[COST_TOTAL_KEY])
+    }
+
+    by_month: dict[tuple[int, int], list[datetime]] = {}
+    for hour_utc in idx_by_hour:
+        local = hour_utc.astimezone(_LOCAL_TZ)
+        by_month.setdefault((local.year, local.month), []).append(hour_utc)
+
+    for hours in by_month.values():
+        peak_kw, peak_hour = max(
+            (hourly_peak_kw.get(h, 0.0), h) for h in hours
+        )
+        if peak_kw <= 0.0:
+            continue
+        period = tariffs.period_for(peak_hour)
+        if period is None:
+            continue
+        pos = period.positions.get(_LEISTUNG_KEY)
+        if pos is None:
+            continue
+        # rate is CHF per kW per month; peak_kw in kW → CHF (incl. MwSt).
+        amount = peak_kw * pos.rate_excl_mwst * pos.mwst_factor
+        i = idx_by_hour[peak_hour]
+        for key in ("netznutzung_leistung", COST_TOTAL_KEY):
+            h, v = out[key][i]
+            out[key][i] = (h, v + amount)
 
 
 def _compute_hour(
@@ -94,6 +155,7 @@ def _compute_hour(
 ) -> dict[str, float]:
     """Costs for a single hour, broken down per category."""
     ht = is_hochtarif(hour_utc)
+    summer = is_summer(hour_utc)
     local = hour_utc.astimezone(_LOCAL_TZ)
     monthly_share = 1.0 / _hours_in_month(local.year, local.month)
 
@@ -104,7 +166,7 @@ def _compute_hour(
         if position is None:
             continue
         bucket[pdef.stat_category] += _position_cost(
-            pdef, position, kwh, ht, monthly_share
+            pdef, position, kwh, ht, summer, monthly_share
         )
 
     return bucket
@@ -115,6 +177,7 @@ def _position_cost(
     position: Position,
     kwh: float,
     ht: bool,
+    summer: bool,
     monthly_share: float,
 ) -> float:
     """CHF (incl. MwSt) this position contributes to a single hour."""
@@ -124,14 +187,22 @@ def _position_cost(
         # ``incl`` is CHF/Monat, distribute across hours of this month.
         return incl * monthly_share
 
+    if pdef.kind == "power_monthly":
+        # Demand charge depends on the whole month's peak — it is added
+        # to the peak hour separately in _inject_leistung_lumps().
+        return 0.0
+
     # variable: incl is Rp/kWh, multiply by kWh and convert Rp→CHF.
     chf_per_kwh = incl * _RP_TO_CHF
 
-    # Apply the HT/NT gate. Flat positions (the four Zuschläge) charge
-    # regardless of time-of-day.
+    # Time-of-use / seasonal gate. Flat positions charge unconditionally.
     if pdef.tariff_split == "ht" and not ht:
         return 0.0
     if pdef.tariff_split == "nt" and ht:
+        return 0.0
+    if pdef.tariff_split == "summer" and not summer:
+        return 0.0
+    if pdef.tariff_split == "winter" and summer:
         return 0.0
 
     return chf_per_kwh * kwh

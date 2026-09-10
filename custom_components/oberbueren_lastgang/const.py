@@ -80,6 +80,7 @@ ACTIVE_MESSLINIEN: Final = (MESSLINIE_BEZUG,)
 COST_CATEGORY_KEYS: Final = (
     "netznutzung_wirkstrom",
     "netznutzung_grundgebuehr",
+    "netznutzung_leistung",
     "energiebezug_wirkstrom",
     "energiebezug_zuschlaege",
     "messtarif",
@@ -90,6 +91,7 @@ COST_TOTAL_KEY: Final = "total"
 COST_CATEGORY_LABELS: Final = {
     "netznutzung_wirkstrom": "Netznutzung Wirkstrom",
     "netznutzung_grundgebuehr": "Netznutzung Grundgebühr",
+    "netznutzung_leistung": "Netznutzung Leistung",
     "energiebezug_wirkstrom": "Energiebezug Wirkstrom",
     "energiebezug_zuschlaege": "Abgaben & Zuschläge",
     "messtarif": "Messtarif",

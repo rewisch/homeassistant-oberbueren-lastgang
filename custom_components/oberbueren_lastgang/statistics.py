@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Iterable, NamedTuple
+from zoneinfo import ZoneInfo
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import (
@@ -35,15 +36,17 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 
-# StatisticMeanType is the modern way to declare "this stat has no
-# arithmetic mean" — older HA used ``has_mean=False``. Both fields are
-# accepted by current HA, but ``mean_type`` is required from 2026.11
-# onward. Conditional import keeps us compatible with older versions.
+# StatisticMeanType is the modern way to declare a statistic's mean
+# behaviour — older HA used ``has_mean``. Both fields are accepted by
+# current HA, but ``mean_type`` is required from 2026.11 onward.
+# Conditional import keeps us compatible with older versions.
 try:
     from homeassistant.components.recorder.models import StatisticMeanType
     _MEAN_TYPE_NONE: object | None = StatisticMeanType.NONE
+    _MEAN_TYPE_ARITHMETIC: object | None = StatisticMeanType.ARITHMETIC
 except ImportError:                                            # pragma: no cover
     _MEAN_TYPE_NONE = None
+    _MEAN_TYPE_ARITHMETIC = None
 from homeassistant.core import HomeAssistant
 
 from .api import MessdatenResponse
@@ -59,9 +62,13 @@ from .cost import compute_hourly_costs
 from .tariffs import TariffDatabase
 
 _LOGGER = logging.getLogger(__name__)
+_LOCAL_TZ = ZoneInfo("Europe/Zurich")
 
 # All API-side power values are in kW; one 15-min sample = 0.25h of energy.
 _INTERVAL_HOURS = 0.25
+
+# Suffix for the hourly power (kW) statistic — mean/min/max, no sum.
+_LEISTUNG_SUFFIX = "leistung"
 
 
 def build_statistic_id(objekt_id: int | str, messlinie: Messlinie) -> str:
@@ -232,29 +239,97 @@ async def async_stored_coverage_per_day(
 
 
 async def _async_read_existing_hourly_kwh(
-    hass: HomeAssistant, statistic_id: str
+    hass: HomeAssistant,
+    statistic_id: str,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> dict[datetime, float]:
-    """Pull every stored hourly kWh ``change`` for one statistic.
+    """Pull stored hourly kWh ``change`` for one statistic.
 
     Used by the overlap-rebuild path so we can splice new days into a
-    chronologically-correct cumulative chain. Returns an empty dict if
-    nothing exists yet.
+    chronologically-correct cumulative chain. ``since`` / ``until`` (UTC)
+    bound the query for the month-scoped cost rebuild; ``until`` is
+    exclusive. Returns an empty dict if nothing exists in range.
     """
-    very_early = datetime(2020, 1, 1, tzinfo=timezone.utc)
-    far_future = datetime.now(tz=timezone.utc) + timedelta(days=1)
+    start = since or datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = until or (datetime.now(tz=timezone.utc) + timedelta(days=1))
     recorder = get_instance(hass)
     rows = await recorder.async_add_executor_job(
         statistics_during_period,
-        hass, very_early, far_future,
+        hass, start, end,
         {statistic_id}, "hour", None, {"change"},
     )
     out: dict[datetime, float] = {}
     for row in rows.get(statistic_id, []):
-        start = row.get("start")
-        if not isinstance(start, datetime):
-            start = datetime.fromtimestamp(float(start), tz=timezone.utc)
-        out[start] = float(row.get("change") or 0.0)
+        row_start = row.get("start")
+        if not isinstance(row_start, datetime):
+            row_start = datetime.fromtimestamp(float(row_start), tz=timezone.utc)
+        out[row_start] = float(row.get("change") or 0.0)
     return out
+
+
+async def _async_read_existing_hourly_power(
+    hass: HomeAssistant,
+    statistic_id: str,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[datetime, HourlyPower]:
+    """Pull stored hourly power (mean/min/max kW) for the Leistung series.
+
+    ``until`` is exclusive. Empty dict if nothing exists in range (e.g.
+    data imported before the power series was introduced).
+    """
+    start = since or datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = until or (datetime.now(tz=timezone.utc) + timedelta(days=1))
+    recorder = get_instance(hass)
+    rows = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass, start, end,
+        {statistic_id}, "hour", None, {"mean", "min", "max"},
+    )
+    out: dict[datetime, HourlyPower] = {}
+    for row in rows.get(statistic_id, []):
+        row_start = row.get("start")
+        if not isinstance(row_start, datetime):
+            row_start = datetime.fromtimestamp(float(row_start), tz=timezone.utc)
+        out[row_start] = HourlyPower(
+            mean_kw=float(row.get("mean") or 0.0),
+            min_kw=float(row.get("min") or 0.0),
+            max_kw=float(row.get("max") or 0.0),
+        )
+    return out
+
+
+async def _async_sum_before(
+    hass: HomeAssistant, statistic_id: str, ts_utc: datetime
+) -> float:
+    """Cumulative ``sum`` at the last stored hour strictly before ``ts_utc``.
+
+    Anchors a month-scoped cost rebuild onto the already-stored chain.
+    Returns 0.0 when nothing precedes ``ts_utc`` (or there's a gap wider
+    than the lookback window — in practice the series is contiguous
+    across month boundaries).
+    """
+    recorder = get_instance(hass)
+    rows = await recorder.async_add_executor_job(
+        statistics_during_period,
+        hass, ts_utc - timedelta(days=3), ts_utc,
+        {statistic_id}, "hour", None, {"sum"},
+    )
+    series = rows.get(statistic_id, [])
+    if not series:
+        return 0.0
+    last_sum = series[-1].get("sum")
+    return float(last_sum) if last_sum is not None else 0.0
+
+
+def _month_start_utc(dt_utc: datetime) -> datetime:
+    """UTC instant of 00:00 on the 1st of ``dt_utc``'s local month."""
+    local = dt_utc.astimezone(_LOCAL_TZ)
+    first = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return first.astimezone(timezone.utc)
 
 
 def build_cost_statistic_id(objekt_id: int | str, category_key: str) -> str:
@@ -275,7 +350,14 @@ def build_cost_statistic_metadata(
     )
 
 
-def _build_meta(*, statistic_id: str, name: str, unit: str) -> StatisticMetaData:
+def _build_meta(
+    *,
+    statistic_id: str,
+    name: str,
+    unit: str,
+    has_sum: bool = True,
+    has_mean: bool = False,
+) -> StatisticMetaData:
     """Construct a StatisticMetaData using whichever ``has_mean`` /
     ``mean_type`` fields the running HA version expects.
 
@@ -283,18 +365,78 @@ def _build_meta(*, statistic_id: str, name: str, unit: str) -> StatisticMetaData
     requires (or warns when missing) ``mean_type``. We provide both
     when the new enum is available, so the metadata is acceptable on
     any version we support.
+
+    Cumulative series (kWh, CHF) use ``has_sum=True``; the power series
+    uses ``has_mean=True`` instead so HA stores/plots hourly mean with a
+    min/max band.
     """
     kwargs: dict = {
-        "has_mean": False,
-        "has_sum": True,
+        "has_mean": has_mean,
+        "has_sum": has_sum,
         "name": name,
         "source": DOMAIN,
         "statistic_id": statistic_id,
         "unit_of_measurement": unit,
     }
     if _MEAN_TYPE_NONE is not None:
-        kwargs["mean_type"] = _MEAN_TYPE_NONE
+        kwargs["mean_type"] = _MEAN_TYPE_ARITHMETIC if has_mean else _MEAN_TYPE_NONE
     return StatisticMetaData(**kwargs)
+
+
+def build_power_statistic_id(objekt_id: int | str) -> str:
+    """External-statistics ID for the hourly power (kW) series."""
+    return f"{DOMAIN}:objekt_{objekt_id}_{_LEISTUNG_SUFFIX}"
+
+
+def build_power_statistic_metadata(
+    objekt_id: int | str, friendly_name: str
+) -> StatisticMetaData:
+    """Metadata for the hourly power series (kW, mean + min/max, no sum)."""
+    return _build_meta(
+        statistic_id=build_power_statistic_id(objekt_id),
+        name=f"{friendly_name} Leistung",
+        unit="kW",
+        has_sum=False,
+        has_mean=True,
+    )
+
+
+class HourlyPower(NamedTuple):
+    """Power (kW) summary for one clock hour, from its ≤4 fifteen-min samples."""
+
+    mean_kw: float
+    min_kw: float
+    max_kw: float
+
+
+def aggregate_to_hourly_power_kw(
+    response: MessdatenResponse,
+) -> dict[datetime, HourlyPower]:
+    """Bucket the 15-min kW samples into per-UTC-hour mean/min/max.
+
+    The monthly demand charge is billed on the highest 15-minute average
+    power, so ``max_kw`` here is the max of that hour's 15-min samples —
+    the monthly peak is then the max of those hourly maxima.
+    """
+    samples: dict[datetime, list[float]] = {}
+    for interval, value_str in zip(response.intervals, response.values):
+        try:
+            kw = float(value_str)
+        except (TypeError, ValueError):
+            continue
+        from_local = datetime.fromisoformat(interval["from"])
+        hour_utc = from_local.astimezone(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        samples.setdefault(hour_utc, []).append(kw)
+    return {
+        hour: HourlyPower(
+            mean_kw=sum(vals) / len(vals),
+            min_kw=min(vals),
+            max_kw=max(vals),
+        )
+        for hour, vals in samples.items()
+    }
 
 
 async def async_import_many(
@@ -321,6 +463,9 @@ async def async_import_many(
         zero. This makes re-running ``backfill`` over an old window
         idempotent — no more "Fix issues in Statistics" workaround.
 
+    Also writes the hourly power (kW) series — mean/min/max per hour —
+    which backs the Leistung graph and the monthly demand-charge peak.
+
     Returns the number of *new* hourly points the caller's responses
     produced. (Rebuild may write many more rows than that to maintain
     chain integrity, but the return value still reflects the size of
@@ -328,11 +473,15 @@ async def async_import_many(
     """
     kwh_id = build_statistic_id(objekt_id, messlinie)
     kwh_meta = build_statistic_metadata(objekt_id, messlinie, friendly_name)
+    power_id = build_power_statistic_id(objekt_id)
+    power_meta = build_power_statistic_metadata(objekt_id, friendly_name)
 
-    # Flatten responses to one chronological hourly series.
+    # Flatten responses to one chronological hourly series (kWh + power).
     new_hourly: list[tuple[datetime, float]] = []
+    new_power: dict[datetime, HourlyPower] = {}
     for response in responses:
         new_hourly.extend(aggregate_to_hourly_kwh(response))
+        new_power.update(aggregate_to_hourly_power_kw(response))
 
     if not new_hourly:
         return 0
@@ -341,6 +490,9 @@ async def async_import_many(
     last_existing = await async_get_last_imported_hour(hass, kwh_id)
     overlap = last_existing is not None and new_hourly[0][0] <= last_existing
 
+    # --- kWh cumulative series ------------------------------------------
+    merged: dict[datetime, float] | None = None
+    merged_pairs: list[tuple[datetime, float]] | None = None
     if overlap:
         merged = await _async_read_existing_hourly_kwh(hass, kwh_id)
         for hour, kwh in new_hourly:
@@ -361,8 +513,6 @@ async def async_import_many(
             len(new_hourly), kwh_id, len(new_hourly),
             len(merged_pairs) - len(new_hourly), running,
         )
-        cost_input = merged_pairs
-        cost_fresh_anchor = True
     else:
         running = await async_get_last_sum(hass, kwh_id)
         kwh_points = []
@@ -377,16 +527,45 @@ async def async_import_many(
             "(final sum %.3f kWh)",
             len(new_hourly), kwh_id, running,
         )
-        cost_input = new_hourly
-        cost_fresh_anchor = False
 
-    # Cost series — only on consumption Messlinien (Einspeisung would
-    # need a separate selling-rate tariff that we don't model yet).
+    # --- hourly power (kW) series: mean/min/max, no cumulative sum ------
+    merged_power: dict[datetime, HourlyPower] | None = None
+    if overlap:
+        merged_power = await _async_read_existing_hourly_power(hass, power_id)
+        merged_power.update(new_power)
+        power_source: dict[datetime, HourlyPower] = merged_power
+    else:
+        power_source = new_power
+    power_points = [
+        StatisticData(start=h, mean=p.mean_kw, min=p.min_kw, max=p.max_kw)
+        for h, p in sorted(power_source.items())
+    ]
+    if power_points:
+        async_add_external_statistics(hass, power_meta, power_points)
+
+    # --- cost series --------------------------------------------------
+    # Only on consumption Messlinien (Einspeisung would need a separate
+    # selling-rate tariff that we don't model yet).
     if tariffs is not None and messlinie.direction == "consumption":
-        await _async_import_costs(
-            hass, objekt_id, friendly_name, cost_input, tariffs,
-            fresh_anchor=cost_fresh_anchor,
-        )
+        if tariffs.has_power_position:
+            # A monthly demand charge needs the whole month in view →
+            # month-scoped rebuild (see the function's docstring).
+            await _async_import_costs_month_scoped(
+                hass, objekt_id, friendly_name, tariffs,
+                kwh_id=kwh_id,
+                power_id=power_id,
+                new_kwh=new_hourly,
+                new_power=new_power,
+                full_rebuild=overlap,
+                merged_kwh=merged if overlap else None,
+                merged_power=merged_power if overlap else None,
+            )
+        else:
+            await _async_import_costs(
+                hass, objekt_id, friendly_name,
+                merged_pairs if overlap else new_hourly, tariffs,
+                fresh_anchor=overlap,
+            )
 
     return len(new_hourly)
 
@@ -399,8 +578,9 @@ async def _async_import_costs(
     tariffs: TariffDatabase,
     *,
     fresh_anchor: bool = False,
+    hourly_peak_kw: dict[datetime, float] | None = None,
 ) -> None:
-    """Compute and write all six cost statistics for one batch of hours.
+    """Compute and write all cost statistics for one batch of hours.
 
     By default the cumulative sum continues from whatever was previously
     stored for each cost stat (the same anchoring behavior the kWh path
@@ -408,8 +588,13 @@ async def _async_import_costs(
     at zero — used by ``async_recompute_costs`` which rebuilds the
     entire chain from the first available hour, making the prior
     stored sums irrelevant.
+
+    ``hourly_peak_kw`` (hour → max 15-min kW) enables the monthly demand
+    charge; pass it only for a rebuild that spans whole months.
     """
-    per_category = compute_hourly_costs(hourly_kwh, tariffs)
+    per_category = compute_hourly_costs(
+        hourly_kwh, tariffs, hourly_peak_kw=hourly_peak_kw
+    )
 
     final_sums: dict[str, float] = {}
     for category_key in (*COST_CATEGORY_KEYS, COST_TOTAL_KEY):
@@ -438,6 +623,92 @@ async def _async_import_costs(
     )
 
 
+async def _async_import_costs_month_scoped(
+    hass: HomeAssistant,
+    objekt_id: int | str,
+    friendly_name: str,
+    tariffs: TariffDatabase,
+    *,
+    kwh_id: str,
+    power_id: str,
+    new_kwh: list[tuple[datetime, float]],
+    new_power: dict[datetime, HourlyPower],
+    full_rebuild: bool,
+    merged_kwh: dict[datetime, float] | None,
+    merged_power: dict[datetime, HourlyPower] | None,
+) -> None:
+    """Write cost statistics for a tariff regime with a monthly demand charge.
+
+    The Leistungspreis lands entirely on the hour that set each calendar
+    month's 15-minute peak, so a correct figure needs the whole month in
+    view — a plain per-batch append can't produce it. Two cases:
+
+      * ``full_rebuild`` (the kWh REBUILD path just ran): ``merged_*``
+        already hold the complete history in memory → recompute every
+        cost series from zero.
+      * otherwise (APPEND path): extend the in-memory new days backwards
+        to the start of the earliest affected local month using stored
+        rows, then recompute the cost series from that month start,
+        anchored on the cumulative sum just before it. Stored rows read
+        here were written on earlier runs, so they're safely flushed;
+        the just-written new rows are taken from memory to dodge the
+        recorder's async write lag.
+    """
+    categories = (*COST_CATEGORY_KEYS, COST_TOTAL_KEY)
+
+    if full_rebuild and merged_kwh is not None:
+        combined_kwh: dict[datetime, float] = dict(merged_kwh)
+        combined_power: dict[datetime, HourlyPower] = dict(merged_power or {})
+        combined_power.update(new_power)
+        since = min(combined_kwh)
+        anchors = {cat: 0.0 for cat in categories}
+    else:
+        earliest_new = new_kwh[0][0]
+        since = _month_start_utc(earliest_new)
+        stored_kwh = await _async_read_existing_hourly_kwh(
+            hass, kwh_id, since=since, until=earliest_new
+        )
+        stored_power = await _async_read_existing_hourly_power(
+            hass, power_id, since=since, until=earliest_new
+        )
+        combined_kwh = {**stored_kwh, **dict(new_kwh)}
+        combined_power = {**stored_power, **new_power}
+        anchors = {
+            cat: await _async_sum_before(
+                hass, build_cost_statistic_id(objekt_id, cat), since
+            )
+            for cat in categories
+        }
+
+    hourly_kwh = sorted(combined_kwh.items())
+    peak_map = {h: p.max_kw for h, p in combined_power.items()}
+    per_category = compute_hourly_costs(
+        hourly_kwh, tariffs, hourly_peak_kw=peak_map
+    )
+
+    final_sums: dict[str, float] = {}
+    for category_key in categories:
+        meta = build_cost_statistic_metadata(
+            objekt_id, category_key, friendly_name
+        )
+        running = anchors[category_key]
+        points: list[StatisticData] = []
+        for hour_utc, increment in per_category[category_key]:
+            running += increment
+            points.append(
+                StatisticData(start=hour_utc, sum=running, state=running)
+            )
+        async_add_external_statistics(hass, meta, points)
+        final_sums[category_key] = running
+
+    _LOGGER.info(
+        "Imported cost statistics for objekt_%s (Leistungs-Tarif) from %s "
+        "over %d hourly points, full_rebuild=%s. Final sums: %s",
+        objekt_id, since.isoformat(), len(hourly_kwh), full_rebuild,
+        ", ".join(f"{k}={v:.2f}" for k, v in final_sums.items()),
+    )
+
+
 async def async_recompute_costs(
     hass: HomeAssistant,
     objekt_id: int | str,
@@ -447,11 +718,11 @@ async def async_recompute_costs(
 ) -> int:
     """Rebuild cost statistics from existing kWh statistics — no API calls.
 
-    Reads every available hourly kWh ``change`` from the recorder for
-    the given Messlinie, applies the current tariff database, and
-    overwrites the six cost statistics from scratch (anchor = 0). Use
-    this after editing the tariff file or when the cost feature was
-    enabled on top of pre-existing kWh data.
+    Reads every available hourly kWh ``change`` (and hourly max power for
+    the demand charge) from the recorder for the given Messlinie, applies
+    the current tariff database, and overwrites every cost statistic from
+    scratch (anchor = 0). Use this after editing the tariff file or when
+    the cost feature was enabled on top of pre-existing kWh data.
 
     Returns the number of hourly points recomputed; 0 if no kWh stats
     exist for the Messlinie or the Messlinie is non-consumption.
@@ -475,10 +746,19 @@ async def async_recompute_costs(
 
     hourly_kwh = sorted(existing.items())
     total_kwh = sum(k for _, k in hourly_kwh)
+
+    # Hourly max power feeds the monthly demand charge. Absent for hours
+    # imported before the power series existed → those months simply get
+    # no Leistung cost (which is correct: it's a 2027+ position anyway).
+    power = await _async_read_existing_hourly_power(
+        hass, build_power_statistic_id(objekt_id)
+    )
+    peak_map = {h: p.max_kw for h, p in power.items()}
+
     _LOGGER.info(
-        "Recompute kWh source for %s: %d hourly rows, %.3f kWh total, "
-        "first=%s, last=%s",
-        kwh_id, len(hourly_kwh), total_kwh,
+        "Recompute source for %s: %d hourly kWh rows, %.3f kWh total, "
+        "%d hourly power rows, first=%s, last=%s",
+        kwh_id, len(hourly_kwh), total_kwh, len(peak_map),
         hourly_kwh[0][0].isoformat(),
         hourly_kwh[-1][0].isoformat(),
     )
@@ -486,5 +766,6 @@ async def async_recompute_costs(
     await _async_import_costs(
         hass, objekt_id, friendly_name, hourly_kwh, tariffs,
         fresh_anchor=True,
+        hourly_peak_kw=peak_map or None,
     )
     return len(hourly_kwh)

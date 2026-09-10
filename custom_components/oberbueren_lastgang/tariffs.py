@@ -1,18 +1,21 @@
 """Tariff database — load YAML, look up the right tariff per hour.
 
 Tariffs live in ``<HA-config>/oberbueren_lastgang_tariffs.yaml`` as a list
-of validity periods. Each period contains rates (in Rp/kWh for variable
-positions, in CHF/Monat for fixed positions) excluding VAT, plus a
-default VAT rate that can be overridden per-position with a ``<key>_mwst``
-sibling.
+of validity periods. Each period contains rates (Rp/kWh for variable
+positions, CHF/Monat for fixed positions, CHF/kW/Monat for the demand
+charge) excluding VAT, plus a default VAT rate that can be overridden
+per-position with a ``<key>_mwst`` sibling.
 
-The 10 paying positions on the Swiss bill are modeled as a flat registry
-(see ``POSITIONS``). Each position has a ``kind`` (variable vs.
-fixed_monthly), a ``tariff_split`` (whether it uses HT/NT or is flat),
-and a ``stat_category`` mapping it onto one of the six cost statistic
-buckets the integration imports.
+The paying positions on the Swiss bill are modeled as a flat registry
+(see ``POSITIONS``). Each position has a ``kind`` (variable /
+fixed_monthly / power_monthly), a ``tariff_split`` (ht / nt / summer /
+winter / flat), and a ``stat_category`` mapping it onto one of the cost
+statistic buckets the integration imports. A period only carries the
+positions that apply to it, so the pre-2027 HT/NT layout and the 2027+
+Einheitstarif + seasonal + Leistungspreis layout coexist by date.
 
 Time-of-use: HT = Mon–Fri 07:00–19:00 in Europe/Zurich, NT otherwise.
+Season (2027+): summer = Apr–Sep, winter = Oct–Mar.
 Public holidays are not handled (per user decision) — a holiday on a
 Wednesday at 10:00 still counts as HT.
 """
@@ -39,11 +42,15 @@ _LOCAL_TZ = ZoneInfo("Europe/Zurich")
 TARIFFS_FILENAME = "oberbueren_lastgang_tariffs.yaml"
 
 
-PositionKind = Literal["variable", "fixed_monthly"]
-TariffSplit = Literal["ht", "nt", "flat"]
+PositionKind = Literal["variable", "fixed_monthly", "power_monthly"]
+# ht / nt  → time-of-use split (Mo–Fr 07–19 = HT), used up to 2026.
+# summer / winter → seasonal split (Apr–Sep = summer), used from 2027.
+# flat → charged regardless of time or season.
+TariffSplit = Literal["ht", "nt", "summer", "winter", "flat"]
 StatCategory = Literal[
     "netznutzung_wirkstrom",
     "netznutzung_grundgebuehr",
+    "netznutzung_leistung",
     "energiebezug_wirkstrom",
     "energiebezug_zuschlaege",
     "messtarif",
@@ -62,19 +69,46 @@ class PositionDef:
     stat_category: StatCategory
 
 
-# Registry of all 10 paying positions. The ordering is significant only
-# for log readability — the runtime keys positions by ``key``.
+# Registry of every paying position the YAML may contain. A given tariff
+# period only carries the subset that applies to it — missing positions
+# are skipped silently (see ``_parse_period``), so the 2026 HT/NT block
+# and the 2027 Einheitstarif + seasonal + Leistung block coexist without
+# a version flag. The ordering is significant only for log readability.
 POSITIONS: tuple[PositionDef, ...] = (
+    # --- Netznutzung ---------------------------------------------------
+    # HT/NT split (≤ 2026).
     PositionDef("netznutzung.wirkstrom_ht", "netznutzung", "wirkstrom_ht",
                 "variable", "ht", "netznutzung_wirkstrom"),
     PositionDef("netznutzung.wirkstrom_nt", "netznutzung", "wirkstrom_nt",
                 "variable", "nt", "netznutzung_wirkstrom"),
+    # Einheitstarif — no time-of-use split (≥ 2027).
+    PositionDef("netznutzung.wirkstrom", "netznutzung", "wirkstrom",
+                "variable", "flat", "netznutzung_wirkstrom"),
     PositionDef("netznutzung.grundgebuehr", "netznutzung", "grundgebuehr",
                 "fixed_monthly", "flat", "netznutzung_grundgebuehr"),
+    # Leistungspreis — CHF per kW of the monthly peak, per month (≥ 2027).
+    PositionDef("netznutzung.leistung", "netznutzung", "leistung",
+                "power_monthly", "flat", "netznutzung_leistung"),
+    # Combined "Netznutzung Abgaben" line (SDL + Stromreserve +
+    # solidarisierte Kosten) — the 2027 Tarifblatt states it as one
+    # number. Buckets with the other Abgaben/Zuschläge.
+    PositionDef("netznutzung.netznutzung_abgaben", "netznutzung",
+                "netznutzung_abgaben", "variable", "flat",
+                "energiebezug_zuschlaege"),
+    # --- Energiebezug ------------------------------------------------------
+    # HT/NT split (≤ 2026).
     PositionDef("energiebezug.wirkstrom_ht", "energiebezug", "wirkstrom_ht",
                 "variable", "ht", "energiebezug_wirkstrom"),
     PositionDef("energiebezug.wirkstrom_nt", "energiebezug", "wirkstrom_nt",
                 "variable", "nt", "energiebezug_wirkstrom"),
+    # Seasonal split (≥ 2027): summer = Apr–Sep, winter = Oct–Mar.
+    PositionDef("energiebezug.wirkstrom_sommer", "energiebezug",
+                "wirkstrom_sommer", "variable", "summer",
+                "energiebezug_wirkstrom"),
+    PositionDef("energiebezug.wirkstrom_winter", "energiebezug",
+                "wirkstrom_winter", "variable", "winter",
+                "energiebezug_wirkstrom"),
+    # --- Abgaben (itemised, ≤ 2026 style) -------------------------------
     PositionDef("abgaben.sdl_swissgrid", "abgaben", "sdl_swissgrid",
                 "variable", "flat", "energiebezug_zuschlaege"),
     PositionDef("abgaben.stromreserve", "abgaben", "stromreserve",
@@ -84,6 +118,7 @@ POSITIONS: tuple[PositionDef, ...] = (
                 "energiebezug_zuschlaege"),
     PositionDef("abgaben.netzzuschlag", "abgaben", "netzzuschlag",
                 "variable", "flat", "energiebezug_zuschlaege"),
+    # --- Messtarif ---------------------------------------------------------
     PositionDef("messtarif", "messtarif", "",
                 "fixed_monthly", "flat", "messtarif"),
 )
@@ -143,6 +178,20 @@ class TariffDatabase:
                 return period
         return None
 
+    @property
+    def has_power_position(self) -> bool:
+        """True if any loaded period carries a ``power_monthly`` position.
+
+        Used to decide whether the (more expensive) month-scoped cost
+        rebuild path is needed at all — pure kWh/HT-NT tariffs skip it.
+        """
+        power_keys = {
+            pdef.key for pdef in POSITIONS if pdef.kind == "power_monthly"
+        }
+        return any(
+            power_keys & set(p.positions) for p in self._periods
+        )
+
     def __len__(self) -> int:
         return len(self._periods)
 
@@ -153,6 +202,16 @@ def is_hochtarif(dt_utc: datetime) -> bool:
     if local.weekday() >= 5:           # Sat=5, Sun=6
         return False
     return 7 <= local.hour < 19
+
+
+def is_summer(dt_utc: datetime) -> bool:
+    """Summer = April–September (Europe/Zurich). Winter otherwise.
+
+    The seasonal energy split introduced for 2027: Sommer 1. April – 30.
+    September, Winter 1. Oktober – 31. März.
+    """
+    local = dt_utc.astimezone(_LOCAL_TZ)
+    return 4 <= local.month <= 9
 
 
 def load_tariffs(config_dir: Path | str) -> TariffDatabase:
@@ -299,13 +358,18 @@ _EXAMPLE_YAML = """\
 # All variable rates (Rp/kWh) are EXCLUDING VAT — the integration
 # applies MwSt automatically using ``mwst_default`` (or a per-position
 # override like ``netzzuschlag_mwst: 0`` when a position is VAT-free).
-# Fixed monthly fees are in CHF.
+# Fixed monthly fees are in CHF; the demand charge is in CHF/kW/Monat.
 #
-# The 10 positions are split across these sections:
-#   netznutzung:  wirkstrom_ht, wirkstrom_nt (Rp/kWh) + grundgebuehr (CHF/Monat)
-#   energiebezug: wirkstrom_ht, wirkstrom_nt (Rp/kWh)
+# A period carries only the positions that apply to it. Available keys:
+#   netznutzung:  wirkstrom_ht / wirkstrom_nt  (Rp/kWh, HT/NT ≤ 2026)
+#                 wirkstrom                    (Rp/kWh, Einheitstarif ≥ 2027)
+#                 grundgebuehr                 (CHF/Monat)
+#                 leistung                     (CHF/kW/Monat, Monatsspitze)
+#                 netznutzung_abgaben          (Rp/kWh, kombinierte Zeile)
+#   energiebezug: wirkstrom_ht / wirkstrom_nt  (Rp/kWh, HT/NT ≤ 2026)
+#                 wirkstrom_sommer / wirkstrom_winter  (Rp/kWh, ≥ 2027)
 #   abgaben:      sdl_swissgrid, stromreserve, solidarisierte_kosten,
-#                 netzzuschlag (all Rp/kWh)
+#                 netzzuschlag                 (all Rp/kWh)
 #   messtarif:    scalar in CHF/Monat
 #
 # Add more periods as your tariffs change. Set ``valid_until: ~`` for

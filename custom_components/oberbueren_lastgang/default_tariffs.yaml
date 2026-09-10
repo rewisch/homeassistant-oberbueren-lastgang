@@ -1,4 +1,4 @@
-# Default-Tarife für Strom Oberbüren (Privatkunden).
+# Default-Tarife für Strom Oberbüren (Privatkunden / Kundengruppe Haushalt).
 #
 # Diese Datei wird von der Integration einmalig nach
 #   <HA-config>/oberbueren_lastgang_tariffs.yaml
@@ -10,29 +10,72 @@
 # Block ein ``valid_until`` setzen. Die Integration liest die Datei bei
 # jedem Import neu — kein HA-Restart nötig.
 #
-# Werte sind ohne MwSt. (8.1% wird automatisch addiert). Per-Position
-# Override z.B. ``netzzuschlag_mwst: 0`` falls eine Position MwSt-frei
-# ist.
+# Werte sind ohne MwSt. (mwst_default wird automatisch addiert). Per-
+# Position Override z.B. ``netzzuschlag_mwst: 0`` falls eine Position
+# MwSt-frei ist.
 #
-# Quelle: Stromrechnung Oberbüren — Stand 2026.
+# Ein Block trägt nur die Positionen, die für ihn gelten — fehlende
+# Positionen werden still übersprungen. So koexistieren das HT/NT-Modell
+# (bis 2026) und das Einheitstarif- + Saison- + Leistungs-Modell (ab
+# 2027) ohne Versions-Flag.
+#
+# Verfügbare Positionen:
+#   netznutzung:
+#     wirkstrom_ht / wirkstrom_nt   Rp/kWh   (HT/NT, bis 2026)
+#     wirkstrom                     Rp/kWh   (Einheitstarif, ab 2027)
+#     grundgebuehr                  CHF/Monat
+#     leistung                      CHF/kW/Monat  (Monatsspitze, ab 2027)
+#     netznutzung_abgaben           Rp/kWh   (kombinierte Abgaben-Zeile 2027)
+#   energiebezug:
+#     wirkstrom_ht / wirkstrom_nt   Rp/kWh   (HT/NT, bis 2026)
+#     wirkstrom_sommer              Rp/kWh   (Apr–Sep, ab 2027)
+#     wirkstrom_winter              Rp/kWh   (Okt–Mär, ab 2027)
+#   abgaben:
+#     sdl_swissgrid / stromreserve / solidarisierte_kosten / netzzuschlag  Rp/kWh
+#   messtarif:                      CHF/Monat  (Skalar, oberste Ebene)
+#
+# Quelle: Stromrechnung Oberbüren 2026 + INFO Oberbüren Nr. 32
+# (28. August 2026) „Strompreise 2027“.
 
+# --- Bis 2026: Hoch-/Niedertarif -------------------------------------
 - valid_from: 2026-01-01
-  valid_until: ~                 # ~ = aktuell gültig
+  valid_until: 2026-12-31
   mwst_default: 8.1
 
   netznutzung:
-    wirkstrom_ht: 10.40          # Rp/kWh
-    wirkstrom_nt: 10.00          # Rp/kWh
-    grundgebuehr: 6.00           # CHF/Monat
+    wirkstrom_ht: 10.40         # Rp/kWh
+    wirkstrom_nt: 10.00         # Rp/kWh
+    grundgebuehr: 6.00          # CHF/Monat
 
   energiebezug:
-    wirkstrom_ht: 17.30          # Rp/kWh
-    wirkstrom_nt: 17.30          # Rp/kWh
+    wirkstrom_ht: 17.30         # Rp/kWh
+    wirkstrom_nt: 17.30         # Rp/kWh
 
   abgaben:
-    sdl_swissgrid: 0.27          # Rp/kWh
-    stromreserve: 0.41           # Rp/kWh
-    solidarisierte_kosten: 0.05  # Rp/kWh
-    netzzuschlag: 2.30           # Rp/kWh
+    sdl_swissgrid: 0.27         # Rp/kWh
+    stromreserve: 0.41          # Rp/kWh
+    solidarisierte_kosten: 0.05 # Rp/kWh
+    netzzuschlag: 2.30          # Rp/kWh
 
-  messtarif: 9.00                # CHF/Monat
+  messtarif: 9.00               # CHF/Monat
+
+# --- Ab 2027: Einheitstarif + Saison-Energie + Leistungspreis --------
+- valid_from: 2027-01-01
+  valid_until: ~               # ~ = aktuell gültig
+  mwst_default: 8.1
+
+  netznutzung:
+    wirkstrom: 8.80            # Rp/kWh, Einheitstarif (kein HT/NT mehr)
+    grundgebuehr: 6.00         # CHF/Monat
+    leistung: 1.50            # CHF/kW/Monat, auf die höchste 15-Min-
+                              #   Mittelleistung des Kalendermonats
+    netznutzung_abgaben: 0.55  # Rp/kWh (SDL + Stromreserve + solidar.)
+
+  energiebezug:
+    wirkstrom_sommer: 15.30    # Rp/kWh, 1. April – 30. September
+    wirkstrom_winter: 18.30    # Rp/kWh, 1. Oktober – 31. März
+
+  abgaben:
+    netzzuschlag: 2.30         # Rp/kWh, „Abgaben Einheitspreis“ (unverändert)
+
+  messtarif: 9.00              # CHF/Monat, „Messtarif Intelligent Grundpreis“

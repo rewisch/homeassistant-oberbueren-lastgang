@@ -114,19 +114,25 @@ Für jeden konfigurierten Zähler erstellt die Integration folgende Statistiken 
 | Statistik-ID                                                    | Bedeutung                                          | Einheit |
 | --------------------------------------------------------------- | -------------------------------------------------- | ------- |
 | `oberbueren_lastgang:objekt_<id>_bezug`                         | kumulativer Verbrauch                              | kWh     |
-| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_wirkstrom`    | Netznutzung Wirkstrom (HT/NT)                      | CHF     |
+| `oberbueren_lastgang:objekt_<id>_leistung`                      | Leistung pro Stunde (Mittel + Min/Max)             | kW      |
+| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_wirkstrom`    | Netznutzung Wirkstrom (HT/NT bzw. Einheitstarif)   | CHF     |
 | `oberbueren_lastgang:objekt_<id>_cost_netznutzung_grundgebuehr` | Grundgebühr (Fix)                                  | CHF     |
-| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_wirkstrom`   | Energiebezug Wirkstrom (HT/NT)                     | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_netznutzung_leistung`     | Leistungspreis: Monatsspitze × CHF/kW (ab 2027)    | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_energiebezug_wirkstrom`   | Energiebezug Wirkstrom (HT/NT bzw. Sommer/Winter)  | CHF     |
 | `oberbueren_lastgang:objekt_<id>_cost_energiebezug_zuschlaege`  | SDL + Stromreserve + Solidarisierte + Netzzuschlag | CHF     |
 | `oberbueren_lastgang:objekt_<id>_cost_messtarif`                | Messtarif (Fix)                                    | CHF     |
-| `oberbueren_lastgang:objekt_<id>_cost_total`                    | Summe aller obigen Werte                           | CHF     |
+| `oberbueren_lastgang:objekt_<id>_cost_total`                    | Summe aller Kostenpositionen                       | CHF     |
 
 Für das Energie-Dashboard:
 **Einstellungen → Dashboards → Energie → Verbrauch hinzufügen**, dort `…_bezug` für kWh und `…_cost_total` als Preis auswählen.
 
+Der Leistungspreis (`…_cost_netznutzung_leistung`) wird der Stunde zugeschlagen, in der die **höchste 15-Minuten-Mittelleistung des Kalendermonats** auftrat (Monatsspitze × Leistungspreis × MwSt), und fliesst in `…_cost_total` ein. Vor 2027 ist er 0.
+
+Die `…_leistung`-Statistik (kW, Stundenmittel mit Min/Max-Band) ist keine Energie-Dashboard-Grösse, sondern für einen Leistungsgraphen gedacht — siehe [Leistungsgraph](#leistungsgraph-kw).
+
 ### Sensor-Entitäten (Lovelace-freundlich)
 
-Zusätzlich zu den Langzeitstatistiken werden pro Zähler 18 Sensor-Entitäten erstellt, die direkt in Dashboards oder Automationen verwendet werden können.
+Zusätzlich zu den Langzeitstatistiken werden pro Zähler 21 Sensor-Entitäten erstellt, die direkt in Dashboards oder Automationen verwendet werden können.
 
 **Periodensensoren** (kWh + CHF für jede Periode — insgesamt 14):
 
@@ -140,14 +146,17 @@ Zusätzlich zu den Langzeitstatistiken werden pro Zähler 18 Sensor-Entitäten e
 | Letzte 7 Tage   | 7 vollständige Tage bis einschließlich gestern  |
 | Letzte 30 Tage  | 30 vollständige Tage bis einschließlich gestern |
 
-**Intelligente Sensoren** (4 abgeleitete Werte):
+**Intelligente Sensoren** (7 abgeleitete Werte):
 
-| Sensor                   | Einheit | Beschreibung                        |
-| ------------------------ | ------- | ----------------------------------- |
-| Prognose Monat           | CHF     | Linear bis Monatsende hochgerechnet |
-| Prognose Jahr            | CHF     | Pro Tag: echter Wert → Vorjahr (falls importiert) → laufender Tagesschnitt |
-| Ø Tagesverbrauch (Monat) | kWh     | Verbrauch ÷ Tage seit Monatsanfang  |
-| Ø Preis (Monat)          | Rp/kWh  | Effektiver Preis inkl. MwSt         |
+| Sensor                        | Einheit | Beschreibung                        |
+| ----------------------------- | ------- | ----------------------------------- |
+| Prognose Monat                | CHF     | Linear bis Monatsende hochgerechnet |
+| Prognose Jahr                 | CHF     | Pro Tag: echter Wert → Vorjahr (falls importiert) → laufender Tagesschnitt |
+| Ø Tagesverbrauch (Monat)      | kWh     | Verbrauch ÷ Tage seit Monatsanfang  |
+| Ø Preis (Monat)               | Rp/kWh  | Effektiver Preis inkl. MwSt         |
+| Leistung Spitze (Monat)       | kW      | Höchste 15-Min-Mittelleistung seit Monatsanfang (Basis des Leistungspreises) |
+| Leistung Spitze (Letzter Monat) | kW    | Dieselbe Spitze für den kompletten Vormonat |
+| Leistung Kosten (Monat)       | CHF     | Leistungspreis-Anteil des laufenden Monats |
 
 Die Kosten-Periodensensoren stellen eine Aufschlüsselung nach Kategorien über die Entity-Attribute bereit — öffne die Entität unter **Entwicklerwerkzeuge → Zustände**, um zu sehen, „woher der Betrag kommt“.
 
@@ -164,39 +173,54 @@ Beim ersten Setup kopiert sie die mitgelieferten Standardwerte nach
 Wenn sich der offizielle Oberbüren-Tarif ändert (typischerweise am 1. Januar), werden die mitgelieferten Standardwerte im Repository aktualisiert — deine lokale Datei bleibt jedoch unverändert.
 Um neue Standardwerte zu übernehmen, kannst du entweder die mitgelieferte `default_tariffs.yaml` vergleichen und Änderungen übernehmen oder deine Datei löschen und HA neu starten, damit sie aus den neuen Standardwerten neu erzeugt wird.
 
-Das Dateiformat:
+Das Dateiformat — jede Periode trägt nur die Positionen, die für sie gelten. Fehlende Positionen werden still übersprungen, sodass das **HT/NT-Modell (bis 2026)** und das **Einheitstarif- + Saison- + Leistungs-Modell (ab 2027)** nach Datum nebeneinander bestehen:
 
 ```yaml
+# Bis 2026: Hoch-/Niedertarif
 - valid_from: 2026-01-01
-  valid_until: ~                    # ~ = aktuell aktiv
+  valid_until: 2026-12-31
   mwst_default: 8.1
-
   netznutzung:
-    wirkstrom_ht: 10.40             # Rp/kWh
+    wirkstrom_ht: 10.40            # Rp/kWh
     wirkstrom_nt: 10.00
-    grundgebuehr: 6.00              # CHF/Monat
-
+    grundgebuehr: 6.00            # CHF/Monat
   energiebezug:
     wirkstrom_ht: 17.30
     wirkstrom_nt: 17.30
-
   abgaben:
     sdl_swissgrid: 0.27
     stromreserve: 0.41
     solidarisierte_kosten: 0.05
     netzzuschlag: 2.30
-    # netzzuschlag_mwst: 0          # optionaler positionsspezifischer MwSt-Override
+    # netzzuschlag_mwst: 0         # optionaler positionsspezifischer MwSt-Override
+  messtarif: 9.00                 # CHF/Monat
 
-  messtarif: 9.00                   # CHF/Monat
+# Ab 2027: Einheitstarif + Saison-Energie + Leistungspreis
+- valid_from: 2027-01-01
+  valid_until: ~                  # ~ = aktuell aktiv
+  mwst_default: 8.1
+  netznutzung:
+    wirkstrom: 8.80              # Rp/kWh, Einheitstarif (kein HT/NT)
+    grundgebuehr: 6.00
+    leistung: 1.50              # CHF/kW/Monat, auf die Monatsspitze
+    netznutzung_abgaben: 0.55    # Rp/kWh, kombinierte Abgaben-Zeile
+  energiebezug:
+    wirkstrom_sommer: 15.30      # Rp/kWh, 1. April – 30. September
+    wirkstrom_winter: 18.30      # Rp/kWh, 1. Oktober – 31. März
+  abgaben:
+    netzzuschlag: 2.30           # „Abgaben Einheitspreis“ (unverändert)
+  messtarif: 9.00
 ```
 
-Füge weitere Perioden für historische Tarife hinzu
-(Schweizer Tarife ändern sich typischerweise am 1. Januar).
-Die Integration verwendet für jede importierte Stunde automatisch die passende Periode, sodass Backfills älterer Jahre korrekte historische Preise verwenden, sofern die passende Periode im YAML vorhanden ist.
+Die Integration verwendet für jede importierte Stunde automatisch die nach Datum passende Periode, sodass Backfills älterer Jahre korrekte historische Preise verwenden, sofern die passende Periode im YAML vorhanden ist.
 
-**HT/NT-Logik** (fest eingebaut):
-Mo–Fr 07:00–19:00 = HT, sonst NT.
-Feiertage werden *nicht* als NT behandelt — ein Feiertag an einem Mittwoch um 10:00 Uhr zählt weiterhin als HT.
+**Zeit-/Saison-Logik** (fest eingebaut):
+* HT/NT: Mo–Fr 07:00–19:00 = HT, sonst NT (nur wenn `wirkstrom_ht`/`_nt` gesetzt sind).
+* Sommer/Winter: April–September = Sommer, Oktober–März = Winter (nur wenn `wirkstrom_sommer`/`_winter` gesetzt sind).
+* Feiertage werden *nicht* berücksichtigt — ein Feiertag an einem Mittwoch um 10:00 zählt als HT.
+* `leistung`: die höchste 15-Minuten-Mittelleistung (kW) je Kalendermonat × Leistungspreis × MwSt, komplett der Spitzenstunde zugeschlagen.
+
+Beim Wechsel auf das 2027-Modell: `valid_until: 2026-12-31` beim alten Block setzen, den neuen Block anfügen, dann einmal `oberbueren_lastgang.recompute_costs` ausführen — die kWh- und Leistungsdaten sind schon da, nur die Kosten werden neu gerechnet.
 
 Die Tarifdatei wird bei jedem Import neu eingelesen, sodass Änderungen ohne Neustart von HA beim nächsten täglichen Import (oder Backfill) wirksam werden.
 

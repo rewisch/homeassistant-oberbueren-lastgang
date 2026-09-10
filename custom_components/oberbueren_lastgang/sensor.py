@@ -1,18 +1,22 @@
-"""Aggregate sensor entities (Verbrauch & Kosten over fixed periods).
+"""Aggregate sensor entities (Verbrauch, Kosten, Leistung over fixed periods).
 
-Per configured meter we expose 8 sensors:
+Per configured meter we expose 21 sensors:
 
-  * Verbrauch (kWh):    aktueller_monat, letzter_monat, aktuelles_jahr, letztes_jahr
-  * Kosten   (CHF):     same four periods, reading the ``cost_total`` statistic.
+  * Verbrauch (kWh) and Kosten (CHF) for 7 periods (current/last month,
+    current/last year, yesterday, last 7/30 days) — 14 total.
+  * 7 derived sensors: month/year cost projection, Ø daily kWh, Ø price,
+    the monthly demand-charge peak (kW, current + last month) and the
+    current month's Leistungspreis (CHF).
 
 Values are computed from HA's long-term statistics (the ones we import in
-statistics.py) by summing per-hour ``change`` increments over the desired
-window. Refresh runs hourly — values can lag the daily import by at most
-that long, which is fine for dashboard purposes.
+statistics.py): kWh/CHF by summing per-hour ``change`` over the window,
+the demand peak by taking the max hourly ``max`` from the power series.
+Refresh runs hourly — values can lag the daily import by at most that
+long, which is fine for dashboard purposes.
 
-The Kosten sensors expose per-category breakdown via
+The Kosten sensors expose a per-category breakdown via
 ``extra_state_attributes`` so a click on the entity reveals "wovon kommt
-der Betrag" without needing four extra entities per period.
+der Betrag" without needing extra entities per period.
 """
 from __future__ import annotations
 
@@ -50,7 +54,11 @@ from .const import (
     CURRENCY,
     DOMAIN,
 )
-from .statistics import build_cost_statistic_id, build_statistic_id
+from .statistics import (
+    build_cost_statistic_id,
+    build_power_statistic_id,
+    build_statistic_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _LOCAL_TZ = ZoneInfo("Europe/Zurich")
@@ -160,6 +168,8 @@ _PERIODS: tuple[PeriodSpec, ...] = (
     Last30Days(key="last_30_days", de_label="Letzte 30 Tage"),
 )
 
+_PERIOD_BY_KEY: dict[str, PeriodSpec] = {p.key: p for p in _PERIODS}
+
 
 # ---------------------------------------------------------------------------
 # Coordinator that batches all 8 statistic queries into one refresh
@@ -228,6 +238,21 @@ class AggregateCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 )
                 result[f"{prefix}_{period.key}"] = value
 
+        # Monthly demand-charge basis: the single highest hourly max
+        # power (kW) within the current / last calendar month.
+        power_id = build_power_statistic_id(self._objekt_id)
+        for period_key in ("current_month", "last_month"):
+            period = _PERIOD_BY_KEY[period_key]
+            start_local, end_local = period.resolve(now_local)
+            peak = await recorder.async_add_executor_job(
+                _max_power_for,
+                self.hass,
+                power_id,
+                start_local.astimezone(dt_util.UTC),
+                end_local.astimezone(dt_util.UTC),
+            )
+            result[f"leistung_max_{period_key}"] = peak
+
         cost_total_id = build_cost_statistic_id(self._objekt_id, COST_TOTAL_KEY)
         year_projection = await recorder.async_add_executor_job(
             _compute_seasonal_year_projection,
@@ -257,6 +282,26 @@ def _sum_change_for(
         {"change"},
     ).get(statistic_id, [])
     return float(sum(r.get("change") or 0.0 for r in rows))
+
+
+def _max_power_for(
+    hass: HomeAssistant,
+    statistic_id: str,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> float | None:
+    """Highest hourly ``max`` (kW) between two UTC times, or None if no data."""
+    rows = statistics_during_period(
+        hass,
+        start_utc,
+        end_utc,
+        {statistic_id},
+        "hour",
+        None,
+        {"max"},
+    ).get(statistic_id, [])
+    vals = [r.get("max") for r in rows if r.get("max") is not None]
+    return float(max(vals)) if vals else None
 
 
 def _daily_change_map(
@@ -453,6 +498,7 @@ class DerivedSensorSpec:
     device_class: SensorDeviceClass | None
     icon: str | None = None
     decimals: int = 2
+    state_class: SensorStateClass | None = None
 
 
 _DERIVED_SPECS: tuple[DerivedSensorSpec, ...] = (
@@ -487,6 +533,33 @@ _DERIVED_SPECS: tuple[DerivedSensorSpec, ...] = (
         device_class=None,
         icon="mdi:cash-multiple",
         decimals=2,
+    ),
+    DerivedSensorSpec(
+        coordinator_key="leistung_max_current_month",
+        name="Leistung Spitze (Monat)",
+        unique_id_suffix="leistung_max_month",
+        unit="kW",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:flash",
+        decimals=3,
+    ),
+    DerivedSensorSpec(
+        coordinator_key="leistung_max_last_month",
+        name="Leistung Spitze (Letzter Monat)",
+        unique_id_suffix="leistung_max_last_month",
+        unit="kW",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:flash",
+        decimals=3,
+    ),
+    DerivedSensorSpec(
+        coordinator_key="cost_netznutzung_leistung_current_month",
+        name="Leistung Kosten (Monat)",
+        unique_id_suffix="leistung_cost_month",
+        unit=CURRENCY,
+        device_class=SensorDeviceClass.MONETARY,
     ),
 )
 
@@ -635,7 +708,9 @@ class DerivedSensor(CoordinatorEntity[AggregateCoordinator], SensorEntity):
         self._attr_native_unit_of_measurement = spec.unit
         if spec.device_class is not None:
             self._attr_device_class = spec.device_class
-        else:
+        if spec.state_class is not None:
+            self._attr_state_class = spec.state_class
+        elif spec.device_class is None:
             # Without a device class, MEASUREMENT is valid and accurate
             # for the Ø-style sensors (true point-in-time values).
             self._attr_state_class = SensorStateClass.MEASUREMENT
