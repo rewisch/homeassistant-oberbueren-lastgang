@@ -168,6 +168,14 @@ class OberbuerenClient:
                         resp.status,
                         resp.headers.get("Location", ""),
                     )
+                if resp.status >= 500:
+                    # A 5xx on /login is an upstream fault, not a
+                    # credentials problem — surface it as a transport
+                    # error so callers back off instead of bouncing the
+                    # user into a reauth flow.
+                    raise ApiError(
+                        f"Login POST returned HTTP {resp.status}"
+                    )
                 if resp.status != 302:
                     raise AuthError(
                         f"Unexpected login response status {resp.status}"
@@ -196,12 +204,27 @@ class OberbuerenClient:
 
         try:
             return await self._do_fetch(objekt_id, meteringcode, messlinie_obis, datum)
-        except AuthError:
-            # Session likely expired mid-session; re-login once and retry.
-            _LOGGER.debug("Session expired, re-authenticating")
+        except AuthError as err:
+            # The site signals an absent/expired session inconsistently:
+            # a 302 → /login, a 401/403, an unexpected non-JSON body, or
+            # (on the data endpoint) a bare HTTP 500 error page. _do_fetch
+            # raises AuthError for all of them. Re-login once and retry.
+            _LOGGER.debug("Session invalid (%s), re-authenticating", err)
             self._logged_in = False
             await self.async_login()
-            return await self._do_fetch(objekt_id, meteringcode, messlinie_obis, datum)
+            try:
+                return await self._do_fetch(
+                    objekt_id, meteringcode, messlinie_obis, datum
+                )
+            except AuthError as err2:
+                # Still failing immediately after a successful fresh
+                # login — this isn't an auth problem. Surface it as a
+                # transport error so the coordinator just skips the day
+                # (and retries at the next slot) instead of tripping the
+                # reauth flow.
+                raise ApiError(
+                    f"Data endpoint still failing after re-login: {err2}"
+                ) from err2
 
     async def _do_fetch(
         self,
@@ -255,13 +278,31 @@ class OberbuerenClient:
                         "content_type=%r url=%s",
                         resp.status, content_type, resp.url,
                     )
-                # If the session is gone, the app redirects HTML→/login.
+                # When the session is gone this site does NOT cleanly
+                # redirect the data endpoint to /login — it may 302, but
+                # in practice the frontend controller throws a bare HTTP
+                # 500 HTML error page ("Ups! Ein Fehler ist aufgetreten").
+                # So 3xx, 401/403 AND 5xx are all treated as "session
+                # likely expired": raising AuthError lets
+                # async_fetch_messdaten re-login once and retry. A 5xx
+                # that persists after a fresh login is converted to an
+                # ApiError there (genuine upstream fault).
                 if resp.status in (301, 302, 303):
                     raise AuthError(
                         f"Redirected to {resp.headers.get('Location')!r} — session expired"
                     )
                 if resp.status in (401, 403):
                     raise AuthError(f"HTTP {resp.status} on data endpoint")
+                if resp.status >= 500:
+                    if self._debug_logging:
+                        body = await resp.text()
+                        _LOGGER.info(
+                            "Diagnostic Messdaten 5xx body (%d chars): %s",
+                            len(body), body[:1200],
+                        )
+                    raise AuthError(
+                        f"HTTP {resp.status} on data endpoint — session likely expired"
+                    )
                 if resp.status >= 400:
                     if self._debug_logging:
                         body = await resp.text()
