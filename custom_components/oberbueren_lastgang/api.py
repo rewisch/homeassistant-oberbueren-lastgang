@@ -8,11 +8,20 @@ Login flow (Symfony-style form auth):
     3. Subsequent requests carry the (regenerated) PHPSESSID cookie.
 
 Session expiry is detected by the data endpoint either returning HTML
-(redirect to login) instead of JSON, or returning 401/403. On expiry the
+(redirect to login) instead of JSON, or returning 401/403/500. On expiry the
 client re-authenticates transparently and retries the request once.
+
+Observed in production (Oct 2026): once the server-side session has expired,
+the site answers *every* request that still carries the old PHPSESSID with
+a bare HTTP 500 — including GET /login. The re-login therefore failed for
+all days of the catch-up window within the same second, while the next
+hourly run (by then carrying the fresh anonymous cookie the 500 page had
+set) succeeded. Hence the login now starts from an empty cookie jar and
+retries a 5xx on GET /login a couple of times with a short back-off.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -39,6 +48,11 @@ _CSRF_INPUT_RE = re.compile(
     re.IGNORECASE,
 )
 _VALUE_RE = re.compile(r"""value=["']([^"']+)["']""", re.IGNORECASE)
+
+# Back-off (seconds) between attempts to GET /login after a 5xx or a
+# transport error. Three attempts in total, well under a minute, so a
+# scheduled hourly run still finishes long before the next one starts.
+_LOGIN_RETRY_DELAYS: tuple[float, ...] = (5.0, 20.0)
 
 
 def _extract_csrf_token(html: str) -> str | None:
@@ -108,22 +122,54 @@ class OberbuerenClient:
         self._debug_logging = debug_logging
         self._logged_in = False
 
+    async def _fetch_login_form(self) -> str:
+        """GET /login from a clean session and return the HTML.
+
+        A 5xx or a transport error is retried per ``_LOGIN_RETRY_DELAYS``;
+        other HTTP errors are raised immediately. Raises ApiError when all
+        attempts fail.
+        """
+        last_err: str = "unknown error"
+        for attempt in range(len(_LOGIN_RETRY_DELAYS) + 1):
+            if attempt:
+                delay = _LOGIN_RETRY_DELAYS[attempt - 1]
+                _LOGGER.debug(
+                    "Login page attempt %d failed (%s), retrying in %.0f s",
+                    attempt, last_err, delay,
+                )
+                await asyncio.sleep(delay)
+            # Drop whatever PHPSESSID is still in the jar. An expired one
+            # makes the site answer GET /login with HTTP 500 (see module
+            # docstring); a fresh anonymous session is always accepted.
+            self._session.cookie_jar.clear()
+            try:
+                async with self._session.get(f"{self._base_url}/login") as resp:
+                    if self._debug_logging:
+                        _LOGGER.info(
+                            "Diagnostic login GET: status=%s content_type=%r url=%s",
+                            resp.status,
+                            resp.headers.get("Content-Type", ""),
+                            resp.url,
+                        )
+                    if resp.status >= 500:
+                        last_err = f"HTTP {resp.status}"
+                        continue
+                    resp.raise_for_status()
+                    return await resp.text()
+            except aiohttp.ClientResponseError as err:
+                raise ApiError(f"Could not reach login page: {err}") from err
+            except aiohttp.ClientError as err:
+                last_err = str(err)
+                continue
+        raise ApiError(
+            f"Could not reach login page after "
+            f"{len(_LOGIN_RETRY_DELAYS) + 1} attempts: {last_err}"
+        )
+
     async def async_login(self) -> None:
         """Perform login. Raises AuthError on bad credentials."""
         # 1. GET the login form to obtain PHPSESSID + CSRF token.
-        try:
-            async with self._session.get(f"{self._base_url}/login") as resp:
-                if self._debug_logging:
-                    _LOGGER.info(
-                        "Diagnostic login GET: status=%s content_type=%r url=%s",
-                        resp.status,
-                        resp.headers.get("Content-Type", ""),
-                        resp.url,
-                    )
-                resp.raise_for_status()
-                html = await resp.text()
-        except aiohttp.ClientError as err:
-            raise ApiError(f"Could not reach login page: {err}") from err
+        html = await self._fetch_login_form()
 
         csrf_token = _extract_csrf_token(html)
         if self._debug_logging:
